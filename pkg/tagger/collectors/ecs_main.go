@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build docker
 
@@ -106,21 +106,28 @@ func (c *ECSCollector) Fetch(entity string) ([]string, []string, []string, error
 
 	for _, info := range updates {
 		if info.Entity == entity {
-			return info.LowCardTags, info.OrchestratorCardTags, info.HighCardTags, nil
+			var err error
+			if info.SkipCache {
+				err = errors.NewPartial(entity)
+			}
+
+			return info.LowCardTags, info.OrchestratorCardTags, info.HighCardTags, err
 		}
 	}
 	// container not found in updates
 	return []string{}, []string{}, []string{}, errors.NewNotFound(entity)
 }
 
-func addTagsForContainer(containerID string, tags *utils.TagList) {
+func addTagsForContainer(containerID string, tags *utils.TagList) error {
 	task, err := fetchContainerTaskWithTagsV3(containerID)
 	if err != nil {
-		log.Warnf("Unable to get resource tags for container %s: %s", containerID, err)
-		return
+		return fmt.Errorf("Unable to get resource tags for container %s: %w", containerID, err)
 	}
+
 	addResourceTags(tags, task.ContainerInstanceTags)
 	addResourceTags(tags, task.TaskTags)
+
+	return nil
 }
 
 func fetchContainerTaskWithTagsV3(containerID string) (*v3.Task, error) {

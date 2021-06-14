@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package status
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DataDog/datadog-agent/cmd/agent/common"
 	"github.com/DataDog/datadog-agent/pkg/clusteragent/admission"
 	"github.com/DataDog/datadog-agent/pkg/clusteragent/clusterchecks"
 	"github.com/DataDog/datadog-agent/pkg/clusteragent/custommetrics"
@@ -32,8 +33,7 @@ import (
 	httputils "github.com/DataDog/datadog-agent/pkg/util/http"
 )
 
-var startTime = time.Now()
-var timeFormat = "2006-01-02 15:04:05.000000 MST"
+var timeFormat = "2006-01-02 15:04:05.999 MST"
 
 // GetStatus grabs the status from expvar and puts it into a map
 func GetStatus() (map[string]interface{}, error) {
@@ -74,9 +74,16 @@ func GetStatus() (map[string]interface{}, error) {
 	}
 
 	if !config.Datadog.GetBool("no_proxy_nonexact_match") {
-		httputils.NoProxyWarningMapMutex.Lock()
-		stats["TransportWarnings"] = httputils.NoProxyWarningMap
-		httputils.NoProxyWarningMapMutex.Unlock()
+		httputils.NoProxyMapMutex.Lock()
+		stats["TransportWarnings"] = len(httputils.NoProxyIgnoredWarningMap)+len(httputils.NoProxyUsedInFuture)+len(httputils.NoProxyChanged) > 0
+		stats["NoProxyIgnoredWarningMap"] = httputils.NoProxyIgnoredWarningMap
+		stats["NoProxyUsedInFuture"] = httputils.NoProxyUsedInFuture
+		stats["NoProxyChanged"] = httputils.NoProxyChanged
+		httputils.NoProxyMapMutex.Unlock()
+	}
+
+	if config.IsContainerized() {
+		stats["autodiscoveryErrors"] = common.AC.GetAutodiscoveryErrors()
 	}
 
 	return stats, nil
@@ -287,10 +294,10 @@ func getCommonStatus() (map[string]interface{}, error) {
 	stats["conf_file"] = config.Datadog.ConfigFileUsed()
 	stats["pid"] = os.Getpid()
 	stats["go_version"] = runtime.Version()
-	stats["agent_start"] = startTime.Format(timeFormat)
+	stats["agent_start_nano"] = config.StartTime.UnixNano()
 	stats["build_arch"] = runtime.GOARCH
 	now := time.Now()
-	stats["time"] = now.Format(timeFormat)
+	stats["time_nano"] = now.UnixNano()
 
 	return stats, nil
 }
@@ -321,7 +328,12 @@ func expvarStats(stats map[string]interface{}) (map[string]interface{}, error) {
 	aggregatorStats := make(map[string]interface{})
 	json.Unmarshal(aggregatorStatsJSON, &aggregatorStats) //nolint:errcheck
 	stats["aggregatorStats"] = aggregatorStats
-
+	s, err := check.TranslateEventPlatformEventTypes(stats["aggregatorStats"])
+	if err != nil {
+		log.Debug("failed to translate event platform event types in aggregatorStats: %s", err.Error())
+	} else {
+		stats["aggregatorStats"] = s
+	}
 	dogstatsdStatsJSON := []byte(expvar.Get("dogstatsd").String())
 	dogstatsdUdsStatsJSON := []byte(expvar.Get("dogstatsd-uds").String())
 	dogstatsdUDPStatsJSON := []byte(expvar.Get("dogstatsd-udp").String())

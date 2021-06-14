@@ -1,13 +1,14 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build kubeapiserver
 
 package mutate
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -190,7 +191,7 @@ func getAndCacheOwner(info *ownerInfo, ns string, dc dynamic.Interface) (*unstru
 
 	log.Tracef("Cache miss while getting owner '%s'", infoID)
 	metrics.GetOwnerCacheMiss.Inc(info.gvr.Resource)
-	ownerObj, err := dc.Resource(info.gvr).Namespace(ns).Get(info.name, metav1.GetOptions{})
+	ownerObj, err := dc.Resource(info.gvr).Namespace(ns).Get(context.TODO(), info.name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}

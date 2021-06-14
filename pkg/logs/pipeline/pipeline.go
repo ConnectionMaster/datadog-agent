@@ -1,11 +1,13 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package pipeline
 
 import (
+	"context"
+
 	"github.com/DataDog/datadog-agent/pkg/logs/client"
 	"github.com/DataDog/datadog-agent/pkg/logs/client/http"
 	"github.com/DataDog/datadog-agent/pkg/logs/client/tcp"
@@ -27,10 +29,10 @@ type Pipeline struct {
 func NewPipeline(outputChan chan *message.Message, processingRules []*config.ProcessingRule, endpoints *config.Endpoints, destinationsContext *client.DestinationsContext, diagnosticMessageReceiver diagnostic.MessageReceiver, serverless bool) *Pipeline {
 	var destinations *client.Destinations
 	if endpoints.UseHTTP {
-		main := http.NewDestination(endpoints.Main, http.JSONContentType, destinationsContext)
+		main := http.NewDestination(endpoints.Main, http.JSONContentType, destinationsContext, endpoints.BatchMaxConcurrentSend)
 		additionals := []client.Destination{}
 		for _, endpoint := range endpoints.Additionals {
-			additionals = append(additionals, http.NewDestination(endpoint, http.JSONContentType, destinationsContext))
+			additionals = append(additionals, http.NewDestination(endpoint, http.JSONContentType, destinationsContext, endpoints.BatchMaxConcurrentSend))
 		}
 		destinations = client.NewDestinations(main, additionals)
 	} else {
@@ -46,7 +48,7 @@ func NewPipeline(outputChan chan *message.Message, processingRules []*config.Pro
 
 	var strategy sender.Strategy
 	if endpoints.UseHTTP || serverless {
-		strategy = sender.NewBatchStrategy(sender.ArraySerializer, endpoints.BatchWait)
+		strategy = sender.NewBatchStrategy(sender.ArraySerializer, endpoints.BatchWait, endpoints.BatchMaxConcurrentSend, endpoints.BatchMaxSize, endpoints.BatchMaxContentSize, "logs")
 	} else {
 		strategy = sender.StreamStrategy
 	}
@@ -86,7 +88,7 @@ func (p *Pipeline) Stop() {
 }
 
 // Flush flushes synchronously the processor and sender managed by this pipeline.
-func (p *Pipeline) Flush() {
-	p.processor.Flush() // flush messages in the processor into the sender
-	p.sender.Flush()    // flush the sender
+func (p *Pipeline) Flush(ctx context.Context) {
+	p.processor.Flush(ctx) // flush messages in the processor into the sender
+	p.sender.Flush(ctx)    // flush the sender
 }

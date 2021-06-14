@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build docker
 
@@ -23,8 +23,8 @@ var (
 	invalidationInterval  = 5 * time.Minute
 )
 
-// GetDockerUtil returns a ready to use DockerUtil. It is backed by a shared singleton.
-func GetDockerUtil() (*DockerUtil, error) {
+// GetDockerUtilWithRetrier returns a ready to use DockerUtil or a retrier
+func GetDockerUtilWithRetrier() (*DockerUtil, *retry.Retrier) {
 	globalDockerUtilMutex.Lock()
 	defer globalDockerUtilMutex.Unlock()
 	if globalDockerUtil == nil {
@@ -39,9 +39,18 @@ func GetDockerUtil() (*DockerUtil, error) {
 	}
 	if err := globalDockerUtil.initRetry.TriggerRetry(); err != nil {
 		log.Debugf("Docker init error: %s", err)
-		return nil, err
+		return nil, &globalDockerUtil.initRetry
 	}
 	return globalDockerUtil, nil
+}
+
+// GetDockerUtil returns a ready to use DockerUtil. It is backed by a shared singleton.
+func GetDockerUtil() (*DockerUtil, error) {
+	util, retirer := GetDockerUtilWithRetrier()
+	if retirer != nil {
+		return nil, retirer.LastError()
+	}
+	return util, nil
 }
 
 // EnableTestingMode creates a "mocked" DockerUtil you can use for unit

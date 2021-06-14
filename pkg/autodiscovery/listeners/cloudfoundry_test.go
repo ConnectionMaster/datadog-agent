@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build clusterchecks
 
@@ -71,7 +71,7 @@ func (b *bbsCacheFake) GetTagsForNode(nodename string) (map[string][]string, err
 var testBBSCache = &bbsCacheFake{}
 
 func TestCloudFoundryListener(t *testing.T) {
-	var lastRefreshCount int64 = 0
+	var lastRefreshCount int64
 	newSvc := make(chan Service, 10)
 	delSvc := make(chan Service, 10)
 	cfl := CloudFoundryListener{

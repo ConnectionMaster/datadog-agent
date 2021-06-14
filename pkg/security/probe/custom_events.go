@@ -3,7 +3,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build linux
 
@@ -13,8 +13,10 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/DataDog/datadog-agent/pkg/security/model"
 	"github.com/DataDog/datadog-agent/pkg/security/rules"
 	"github.com/DataDog/datadog-agent/pkg/security/secl/eval"
+	"github.com/hashicorp/go-multierror"
 )
 
 const (
@@ -26,8 +28,6 @@ const (
 	NoisyProcessRuleID = "noisy_process"
 	// AbnormalPathRuleID is the rule ID for the abnormal_path events
 	AbnormalPathRuleID = "abnormal_path"
-	// ForkBombRuleID is the rule ID for the fork_bomb events
-	ForkBombRuleID = "fork_bomb"
 )
 
 // AllCustomRuleIDs returns the list of custom rule IDs
@@ -37,11 +37,10 @@ func AllCustomRuleIDs() []string {
 		RulesetLoadedRuleID,
 		NoisyProcessRuleID,
 		AbnormalPathRuleID,
-		ForkBombRuleID,
 	}
 }
 
-func newCustomEvent(eventType EventType, marshalFunc func() ([]byte, error)) *CustomEvent {
+func newCustomEvent(eventType model.EventType, marshalFunc func() ([]byte, error)) *CustomEvent {
 	return &CustomEvent{
 		eventType:   eventType,
 		marshalFunc: marshalFunc,
@@ -50,7 +49,7 @@ func newCustomEvent(eventType EventType, marshalFunc func() ([]byte, error)) *Cu
 
 // CustomEvent is used to send custom security events to Datadog
 type CustomEvent struct {
-	eventType   EventType
+	eventType   model.EventType
 	tags        []string
 	marshalFunc func() ([]byte, error)
 }
@@ -75,7 +74,7 @@ func (ce *CustomEvent) GetType() string {
 }
 
 // GetEventType returns the event type
-func (ce *CustomEvent) GetEventType() EventType {
+func (ce *CustomEvent) GetEventType() model.EventType {
 	return ce.eventType
 }
 
@@ -103,18 +102,18 @@ func newRule(ruleDef *rules.RuleDefinition) *rules.Rule {
 // EventLostRead is the event used to report lost events detected from user space
 // easyjson:json
 type EventLostRead struct {
-	Timestamp time.Time     `json:"date"`
-	Name      string        `json:"map"`
-	Lost      map[int]int64 `json:"per_cpu"`
+	Timestamp time.Time `json:"date"`
+	Name      string    `json:"map"`
+	Lost      float64   `json:"lost"`
 }
 
 // NewEventLostReadEvent returns the rule and a populated custom event for a lost_events_read event
-func NewEventLostReadEvent(mapName string, perCPU map[int]int64) (*rules.Rule, *CustomEvent) {
+func NewEventLostReadEvent(mapName string, lost float64) (*rules.Rule, *CustomEvent) {
 	return newRule(&rules.RuleDefinition{
 			ID: LostEventsRuleID,
-		}), newCustomEvent(CustomLostReadEventType, EventLostRead{
+		}), newCustomEvent(model.CustomLostReadEventType, EventLostRead{
 			Name:      mapName,
-			Lost:      perCPU,
+			Lost:      lost,
 			Timestamp: time.Now(),
 		}.MarshalJSON)
 }
@@ -122,40 +121,144 @@ func NewEventLostReadEvent(mapName string, perCPU map[int]int64) (*rules.Rule, *
 // EventLostWrite is the event used to report lost events detected from kernel space
 // easyjson:json
 type EventLostWrite struct {
-	Timestamp time.Time                 `json:"date"`
-	Name      string                    `json:"map"`
-	Lost      map[string]map[int]uint64 `json:"per_event_per_cpu"`
+	Timestamp time.Time         `json:"date"`
+	Name      string            `json:"map"`
+	Lost      map[string]uint64 `json:"per_event"`
 }
 
 // NewEventLostWriteEvent returns the rule and a populated custom event for a lost_events_write event
-func NewEventLostWriteEvent(mapName string, perEventPerCPU map[string]map[int]uint64) (*rules.Rule, *CustomEvent) {
+func NewEventLostWriteEvent(mapName string, perEventPerCPU map[string]uint64) (*rules.Rule, *CustomEvent) {
 	return newRule(&rules.RuleDefinition{
 			ID: LostEventsRuleID,
-		}), newCustomEvent(CustomLostWriteEventType, EventLostWrite{
+		}), newCustomEvent(model.CustomLostWriteEventType, EventLostWrite{
 			Name:      mapName,
 			Lost:      perEventPerCPU,
 			Timestamp: time.Now(),
 		}.MarshalJSON)
 }
 
+// RuleIgnored defines a ignored
+// easyjson:json
+type RuleIgnored struct {
+	ID         string `json:"id"`
+	Version    string `json:"version,omitempty"`
+	Expression string `json:"expression"`
+	Reason     string `json:"reason"`
+}
+
+// PoliciesIgnored holds the errors
+type PoliciesIgnored struct {
+	Errors *multierror.Error
+}
+
+// MarshalJSON custom marshaller
+func (r *PoliciesIgnored) MarshalJSON() ([]byte, error) {
+	if r.Errors == nil {
+		return nil, nil
+	}
+
+	var errs []interface{}
+
+	for _, err := range r.Errors.Errors {
+		if perr, ok := err.(*rules.ErrPolicyLoad); ok {
+			errs = append(errs,
+				struct {
+					Name   string `json:"name"`
+					Reason string `json:"reason"`
+				}{
+					Name:   perr.Name,
+					Reason: perr.Err.Error(),
+				})
+		}
+	}
+
+	return json.Marshal(errs)
+}
+
+// UnmarshalJSON empty unmarshaller
+func (r *PoliciesIgnored) UnmarshalJSON(data []byte) error {
+	return nil
+}
+
+// RuleLoaded defines a loaded rule
+// easyjson:json
+type RuleLoaded struct {
+	ID         string `json:"id"`
+	Version    string `json:"version,omitempty"`
+	Expression string `json:"expression"`
+}
+
+// PolicyLoaded is used to report policy was loaded
+// easyjson:json
+type PolicyLoaded struct {
+	Version      string
+	RulesLoaded  []*RuleLoaded  `json:"rules_loaded"`
+	RulesIgnored []*RuleIgnored `json:"rules_ignored,omitempty"`
+}
+
 // RulesetLoadedEvent is used to report that a new ruleset was loaded
 // easyjson:json
 type RulesetLoadedEvent struct {
-	Timestamp time.Time         `json:"date"`
-	Policies  map[string]string `json:"policies"`
-	Rules     []rules.RuleID    `json:"rules"`
-	Macros    []rules.MacroID   `json:"macros"`
+	Timestamp       time.Time        `json:"date"`
+	PoliciesLoaded  []*PolicyLoaded  `json:"policies"`
+	PoliciesIgnored *PoliciesIgnored `json:"policies_ignored,omitempty"`
+	MacrosLoaded    []rules.MacroID  `json:"macros_loaded"`
 }
 
 // NewRuleSetLoadedEvent returns the rule and a populated custom event for a new_rules_loaded event
-func NewRuleSetLoadedEvent(loadedPolicies map[string]string, loadedRules []rules.RuleID, loadedMacros []rules.MacroID) (*rules.Rule, *CustomEvent) {
+func NewRuleSetLoadedEvent(rs *rules.RuleSet, err *multierror.Error) (*rules.Rule, *CustomEvent) {
+	mp := make(map[string]*PolicyLoaded)
+
+	var policy *PolicyLoaded
+	var exists bool
+
+	// rule successfully loaded
+	for _, rule := range rs.GetRules() {
+		policyName := rule.Definition.Policy.Name
+
+		if policy, exists = mp[policyName]; !exists {
+			policy = &PolicyLoaded{Version: rule.Definition.Policy.Version}
+			mp[policyName] = policy
+		}
+		policy.RulesLoaded = append(policy.RulesLoaded, &RuleLoaded{
+			ID:         rule.ID,
+			Version:    rule.Definition.Version,
+			Expression: rule.Definition.Expression,
+		})
+	}
+
+	// rules ignored due to errors
+	if err != nil && err.Errors != nil {
+		for _, err := range err.Errors {
+			if rerr, ok := err.(*rules.ErrRuleLoad); ok {
+				policyName := rerr.Definition.Policy.Name
+
+				if policy, exists = mp[policyName]; !exists {
+					policy = &PolicyLoaded{}
+					mp[policyName] = policy
+				}
+				policy.RulesIgnored = append(policy.RulesIgnored, &RuleIgnored{
+					ID:         rerr.Definition.ID,
+					Version:    rerr.Definition.Version,
+					Expression: rerr.Definition.Expression,
+					Reason:     rerr.Err.Error(),
+				})
+			}
+		}
+	}
+
+	var policies []*PolicyLoaded
+	for _, policy := range mp {
+		policies = append(policies, policy)
+	}
+
 	return newRule(&rules.RuleDefinition{
 			ID: RulesetLoadedRuleID,
-		}), newCustomEvent(CustomRulesetLoadedEventType, RulesetLoadedEvent{
-			Timestamp: time.Now(),
-			Policies:  loadedPolicies,
-			Rules:     loadedRules,
-			Macros:    loadedMacros,
+		}), newCustomEvent(model.CustomRulesetLoadedEventType, RulesetLoadedEvent{
+			Timestamp:       time.Now(),
+			PoliciesLoaded:  policies,
+			PoliciesIgnored: &PoliciesIgnored{Errors: err},
+			MacrosLoaded:    rs.ListMacroIDs(),
 		}.MarshalJSON)
 }
 
@@ -163,7 +266,6 @@ func NewRuleSetLoadedEvent(loadedPolicies map[string]string, loadedRules []rules
 // easyjson:json
 type NoisyProcessEvent struct {
 	Timestamp      time.Time                 `json:"date"`
-	Event          string                    `json:"event_type"`
 	Count          uint64                    `json:"pid_count"`
 	Threshold      int64                     `json:"threshold"`
 	ControlPeriod  time.Duration             `json:"control_period"`
@@ -172,19 +274,17 @@ type NoisyProcessEvent struct {
 }
 
 // NewNoisyProcessEvent returns the rule and a populated custom event for a noisy_process event
-func NewNoisyProcessEvent(eventType EventType,
-	count uint64,
+func NewNoisyProcessEvent(count uint64,
 	threshold int64,
 	controlPeriod time.Duration,
 	discardedUntil time.Time,
-	process *ProcessCacheEntry,
+	process *model.ProcessCacheEntry,
 	resolvers *Resolvers,
 	timestamp time.Time) (*rules.Rule, *CustomEvent) {
 	return newRule(&rules.RuleDefinition{
 			ID: NoisyProcessRuleID,
-		}), newCustomEvent(CustomNoisyProcessEventType, NoisyProcessEvent{
+		}), newCustomEvent(model.CustomNoisyProcessEventType, NoisyProcessEvent{
 			Timestamp:      timestamp,
-			Event:          eventType.String(),
 			Count:          count,
 			Threshold:      threshold,
 			ControlPeriod:  controlPeriod,
@@ -193,14 +293,12 @@ func NewNoisyProcessEvent(eventType EventType,
 		}.MarshalJSON)
 }
 
-func resolutionErrorToEventType(err error) EventType {
+func resolutionErrorToEventType(err error) model.EventType {
 	switch err.(type) {
 	case ErrTruncatedParents:
-		return CustomTruncatedParentsEventType
-	case ErrTruncatedSegment:
-		return CustomTruncatedSegmentEventType
+		return model.CustomTruncatedParentsEventType
 	default:
-		return UnknownEventType
+		return model.UnknownEventType
 	}
 }
 
@@ -220,22 +318,5 @@ func NewAbnormalPathEvent(event *Event, pathResolutionError error) (*rules.Rule,
 			Timestamp:           event.ResolveEventTimestamp(),
 			Event:               newEventSerializer(event),
 			PathResolutionError: pathResolutionError.Error(),
-		}.MarshalJSON)
-}
-
-// ForkBombEvent is used to report the detection of a fork bomb
-// easyjson:json
-type ForkBombEvent struct {
-	Timestamp time.Time        `json:"date"`
-	Event     *EventSerializer `json:"triggering_event"`
-}
-
-// NewForkBombEvent returns the rule and a populated custom event for a fork_bomb event
-func NewForkBombEvent(event *Event) (*rules.Rule, *CustomEvent) {
-	return newRule(&rules.RuleDefinition{
-			ID: ForkBombRuleID,
-		}), newCustomEvent(CustomForkBombEventType, ForkBombEvent{
-			Timestamp: event.ResolveEventTimestamp(),
-			Event:     newEventSerializer(event),
 		}.MarshalJSON)
 }

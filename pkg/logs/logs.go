@@ -1,11 +1,12 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package logs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -14,7 +15,6 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery"
 	coreConfig "github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/logs/metrics"
-	"github.com/DataDog/datadog-agent/pkg/serverless/aws"
 
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 
@@ -50,11 +50,11 @@ func Start(getAC func() *autodiscovery.AutoConfig) error {
 }
 
 // StartServerless starts a Serverless instance of the Logs Agent.
-func StartServerless(getAC func() *autodiscovery.AutoConfig, logsChan chan aws.LogMessage, extraTags []string) error {
+func StartServerless(getAC func() *autodiscovery.AutoConfig, logsChan chan *config.ChannelMessage, extraTags []string) error {
 	return start(getAC, true, logsChan, extraTags)
 }
 
-func start(getAC func() *autodiscovery.AutoConfig, serverless bool, logsChan chan aws.LogMessage, extraTags []string) error {
+func start(getAC func() *autodiscovery.AutoConfig, serverless bool, logsChan chan *config.ChannelMessage, extraTags []string) error {
 	if IsAgentRunning() {
 		return nil
 	}
@@ -72,6 +72,9 @@ func start(getAC func() *autodiscovery.AutoConfig, serverless bool, logsChan cha
 		httpConnectivity = http.CheckConnectivity(endpoints.Main)
 	}
 	endpoints, err := config.BuildEndpoints(httpConnectivity)
+	if serverless {
+		endpoints, err = config.BuildServerlessEndpoints()
+	}
 	if err != nil {
 		message := fmt.Sprintf("Invalid endpoints: %v", err)
 		status.AddGlobalError(invalidEndpoints, message)
@@ -174,13 +177,15 @@ func Stop() {
 }
 
 // Flush flushes synchronously the running instance of the Logs Agent.
-func Flush() {
+// Use a WithTimeout context in order to have a flush that can be cancelled.
+func Flush(ctx context.Context) {
 	log.Info("Triggering a flush in the logs-agent")
 	if IsAgentRunning() {
 		if agent != nil {
-			agent.Flush()
+			agent.Flush(ctx)
 		}
 	}
+	log.Debug("Flush in the logs-agent done.")
 }
 
 // IsAgentRunning returns true if the logs-agent is running.

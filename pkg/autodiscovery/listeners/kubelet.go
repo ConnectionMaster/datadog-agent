@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build kubelet
 
@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DataDog/datadog-agent/pkg/autodiscovery/common"
+	"github.com/DataDog/datadog-agent/pkg/autodiscovery/common/utils"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/status/health"
@@ -93,7 +93,7 @@ func NewKubeletListener() (ServiceListener, error) {
 		services: make(map[string]Service),
 		ticker:   time.NewTicker(config.Datadog.GetDuration("kubelet_listener_polling_interval") * time.Second),
 		stop:     make(chan bool),
-		health:   health.RegisterLiveness("ad-kubeletlistener"),
+		health:   health.RegisterReadiness("ad-kubeletlistener"),
 	}, nil
 }
 
@@ -249,7 +249,7 @@ func (l *KubeletListener) createService(entity string, pod *kubelet.Pod, firstRu
 
 			// Check for custom AD identifiers
 			adIdentifier := containerName
-			if customADIdentifier, customIDFound := common.GetCustomCheckID(pod.Metadata.Annotations, containerName); customIDFound {
+			if customADIdentifier, customIDFound := utils.GetCustomCheckID(pod.Metadata.Annotations, containerName); customIDFound {
 				adIdentifier = customADIdentifier
 				// Add custom check ID as AD identifier
 				svc.adIdentifiers = append(svc.adIdentifiers, customADIdentifier)
@@ -309,10 +309,15 @@ func (l *KubeletListener) createService(entity string, pod *kubelet.Pod, firstRu
 	l.m.Lock()
 	defer l.m.Unlock()
 	old, found := l.services[entity]
-	if found && kubeletSvcEqual(old, &svc) {
-		log.Tracef("Received a duplicated kubelet service '%s'", svc.entity)
-		return
+	if found {
+		if kubeletSvcEqual(old, &svc) {
+			log.Tracef("Received a duplicated kubelet service '%s'", svc.entity)
+			return
+		}
+		log.Tracef("Kubelet service '%s' has been updated, removing the old one", svc.entity)
+		l.delService <- old
 	}
+
 	l.services[entity] = &svc
 
 	l.newService <- &svc
@@ -406,7 +411,7 @@ func (s *KubeContainerService) GetEntity() string {
 	return s.entity
 }
 
-// GetEntity returns the unique entity name linked to that service
+// GetTaggerEntity returns the unique entity name linked to that service
 func (s *KubeContainerService) GetTaggerEntity() string {
 	taggerEntity, err := kubelet.KubeContainerIDToTaggerEntityID(s.entity)
 	if err != nil {
@@ -482,7 +487,7 @@ func (s *KubePodService) GetEntity() string {
 	return s.entity
 }
 
-// GetEntity returns the unique entity name linked to that service
+// GetTaggerEntity returns the unique entity name linked to that service
 func (s *KubePodService) GetTaggerEntity() string {
 	taggerEntity, err := kubelet.KubePodUIDToTaggerEntityID(s.entity)
 	if err != nil {

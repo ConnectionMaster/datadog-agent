@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package providers
 
@@ -140,6 +140,11 @@ func (c *FileConfigProvider) IsUpToDate() (bool, error) {
 // String returns a string representation of the FileConfigProvider
 func (c *FileConfigProvider) String() string {
 	return names.File
+}
+
+// GetConfigErrors is not implemented for the FileConfigProvider
+func (c *FileConfigProvider) GetConfigErrors() map[string]ErrorMsgSet {
+	return make(map[string]ErrorMsgSet)
 }
 
 // collectEntry collects a file entry and return it's configuration if valid

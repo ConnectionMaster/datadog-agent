@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build systemd
 
@@ -1013,7 +1013,7 @@ unit_names:
 func TestCheckID(t *testing.T) {
 	check1 := systemdFactory()
 	check2 := systemdFactory()
-	aggregator.InitAggregatorWithFlushInterval(nil, "", 1*time.Hour)
+	aggregator.InitAggregatorWithFlushInterval(nil, nil, "", 1*time.Hour)
 
 	// language=yaml
 	rawInstanceConfig1 := []byte(`

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build functionaltests
 
@@ -10,6 +10,8 @@ package tests
 import (
 	"os"
 	"testing"
+
+	"gotest.tools/assert"
 
 	"github.com/DataDog/datadog-agent/pkg/security/rules"
 )
@@ -29,7 +31,7 @@ func TestMacros(t *testing.T) {
 	rules := []*rules.RuleDefinition{
 		{
 			ID:         "test_rule",
-			Expression: `testmacro in testmacro2 && mkdir.filename in testmacro2`,
+			Expression: `testmacro in testmacro2 && mkdir.file.path in testmacro2`,
 		},
 	}
 
@@ -53,8 +55,6 @@ func TestMacros(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	} else {
-		if event.GetType() != "mkdir" {
-			t.Errorf("expected mkdir event, got %s", event.GetType())
-		}
+		assert.Equal(t, event.GetType(), "mkdir", "wrong event type")
 	}
 }

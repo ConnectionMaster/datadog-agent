@@ -1,13 +1,14 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build windows
 
 package service
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/DataDog/datadog-agent/cmd/agent/app"
@@ -29,10 +30,6 @@ func (m *agentWindowsService) Execute(args []string, r <-chan svc.ChangeRequest,
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
 	changes <- svc.Status{State: svc.StartPending}
 
-	if err := common.ImportRegistryConfig(); err != nil {
-		elog.Warning(0x80000001, err.Error())
-		// continue running agent with existing config
-	}
 	if err := common.CheckAndUpgradeConfig(); err != nil {
 		elog.Warning(0x80000002, err.Error())
 		// continue running with what we have.
@@ -66,7 +63,7 @@ loop:
 				break loop
 			default:
 				log.Warnf("unexpected control request #%d", c)
-				elog.Error(0xc0000009, string(c.Cmd))
+				elog.Error(0xc0000009, fmt.Sprint(c.Cmd))
 			}
 		case <-signals.Stopper:
 			elog.Info(0x4000000a, config.ServiceName)

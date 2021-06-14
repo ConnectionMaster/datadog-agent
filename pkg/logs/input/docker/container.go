@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build docker
 
@@ -38,7 +38,7 @@ func NewContainer(container types.ContainerJSON, service *service.Service) *Cont
 	}
 }
 
-// findSource returns the source that most likely matches the container,
+// FindSource returns the source that most likely matches the container,
 // if no source is found return nil
 func (c *Container) FindSource(sources []*config.LogSource) *config.LogSource {
 	var bestMatch *config.LogSource

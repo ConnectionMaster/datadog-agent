@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build docker
 
@@ -79,7 +79,7 @@ func NewDockerListener() (ServiceListener, error) {
 		filters:    filters,
 		services:   make(map[string]Service),
 		stop:       make(chan bool),
-		health:     health.RegisterLiveness("ad-dockerlistener"),
+		health:     health.RegisterReadiness("ad-dockerlistener"),
 	}, nil
 }
 
@@ -204,9 +204,9 @@ func (l *DockerListener) processEvent(e *docker.ContainerEvent) {
 
 	if found {
 		switch e.Action {
-		case "die":
+		case docker.ContainerEventActionDie:
 			l.removeService(cID)
-		case "start":
+		case docker.ContainerEventActionStart:
 			// Container restarted with the same ID within 5 seconds.
 			time.AfterFunc(5*time.Second, func() {
 				l.createService(cID)
@@ -236,22 +236,23 @@ func (l *DockerListener) createService(cID string) {
 	var isKube bool
 	cInspect, err := l.dockerUtil.Inspect(cID, false)
 	if err != nil {
-		log.Errorf("Failed to inspect container %s - %s", cID[:12], err)
-	} else {
-		containerImage, err = l.dockerUtil.ResolveImageNameFromContainer(cInspect)
-		if err != nil {
-			log.Warnf("error while resolving image name: %s", err)
-			containerImage = ""
-		}
-		// Detect AD exclusion
-		containerName = cInspect.Name
-		if l.filters.IsExcluded(containers.GlobalFilter, containerName, containerImage, "") {
-			log.Debugf("container %s filtered out: name %q image %q", cID[:12], containerName, containerImage)
-			return
-		}
-		if findKubernetesInLabels(cInspect.Config.Labels) {
-			isKube = true
-		}
+		log.Errorf("Failed to inspect container '%s', not creating AD service, err: %s", cID[:12], err)
+		return
+	}
+
+	containerImage, err = l.dockerUtil.ResolveImageNameFromContainer(cInspect)
+	if err != nil {
+		log.Warnf("error while resolving image name: %s", err)
+		containerImage = ""
+	}
+	// Detect AD exclusion
+	containerName = cInspect.Name
+	if l.filters.IsExcluded(containers.GlobalFilter, containerName, containerImage, "") {
+		log.Debugf("container %s filtered out: name %q image %q", cID[:12], containerName, containerImage)
+		return
+	}
+	if findKubernetesInLabels(cInspect.Config.Labels) {
+		isKube = true
 	}
 
 	checkNames, err := getCheckNamesFromLabels(cInspect.Config.Labels)

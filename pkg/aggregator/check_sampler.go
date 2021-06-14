@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package aggregator
 
@@ -14,12 +14,13 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
+const defaultExpiry = 300.0 // number of seconds after which contexts are expired
 const checksSourceTypeName = "System"
 
 // CheckSampler aggregates metrics from one Check instance
 type CheckSampler struct {
 	series          []*metrics.Serie
-	sketches        []metrics.SketchSeries
+	sketches        metrics.SketchSeriesList
 	contextResolver *ContextResolver
 	metrics         metrics.ContextMetrics
 	sketchMap       sketchMap
@@ -29,16 +30,16 @@ type CheckSampler struct {
 }
 
 // newCheckSampler returns a newly initialized CheckSampler
-func newCheckSampler() *CheckSampler {
+func newCheckSampler(bucketExpiry time.Duration) *CheckSampler {
 	return &CheckSampler{
 		series:          make([]*metrics.Serie, 0),
-		sketches:        make([]metrics.SketchSeries, 0),
+		sketches:        make(metrics.SketchSeriesList, 0),
 		contextResolver: newContextResolver(),
 		metrics:         metrics.MakeContextMetrics(),
 		sketchMap:       make(sketchMap),
 		lastBucketValue: make(map[ckey.ContextKey]int64),
 		lastSeenBucket:  make(map[ckey.ContextKey]time.Time),
-		bucketExpiry:    1 * time.Minute,
+		bucketExpiry:    bucketExpiry,
 	}
 }
 
@@ -51,7 +52,7 @@ func (cs *CheckSampler) addSample(metricSample *metrics.MetricSample) {
 }
 
 func (cs *CheckSampler) newSketchSeries(ck ckey.ContextKey, points []metrics.SketchPoint) metrics.SketchSeries {
-	ctx := cs.contextResolver.contextsByKey[ck]
+	ctx, _ := cs.contextResolver.get(ck)
 	ss := metrics.SketchSeries{
 		Name: ctx.Name,
 		Tags: ctx.Tags,
@@ -89,12 +90,15 @@ func (cs *CheckSampler) addBucket(bucket *metrics.HistogramBucket) {
 	if bucket.Monotonic {
 		lastBucketValue, bucketFound := cs.lastBucketValue[contextKey]
 		rawValue := bucket.Value
-		if bucketFound {
-			cs.lastSeenBucket[contextKey] = time.Now()
-			bucket.Value = rawValue - lastBucketValue
-		}
-		cs.lastBucketValue[contextKey] = rawValue
+
 		cs.lastSeenBucket[contextKey] = time.Now()
+		cs.lastBucketValue[contextKey] = rawValue
+		// Return early so we don't report the first raw value instead of the delta which will cause spikes
+		if !bucketFound && !bucket.FlushFirstValue {
+			return
+		}
+
+		bucket.Value = rawValue - lastBucketValue
 	}
 
 	if bucket.Value < 0 {
@@ -122,7 +126,7 @@ func (cs *CheckSampler) addBucket(bucket *metrics.HistogramBucket) {
 func (cs *CheckSampler) commitSeries(timestamp float64) {
 	series, errors := cs.metrics.Flush(timestamp)
 	for ckey, err := range errors {
-		context, ok := cs.contextResolver.contextsByKey[ckey]
+		context, ok := cs.contextResolver.get(ckey)
 		if !ok {
 			log.Errorf("Can't resolve context of error '%s': inconsistent context resolver state: context with key '%v' is not tracked", err, ckey)
 			continue
@@ -131,7 +135,7 @@ func (cs *CheckSampler) commitSeries(timestamp float64) {
 	}
 	for _, serie := range series {
 		// Resolve context and populate new []Serie
-		context, ok := cs.contextResolver.contextsByKey[serie.ContextKey]
+		context, ok := cs.contextResolver.get(serie.ContextKey)
 		if !ok {
 			log.Errorf("Ignoring all metrics on context key '%v': inconsistent context resolver state: the context is not tracked", serie.ContextKey)
 			continue
@@ -163,6 +167,7 @@ func (cs *CheckSampler) commit(timestamp float64) {
 	cs.commitSeries(timestamp)
 	cs.commitSketches(timestamp)
 	cs.contextResolver.expireContexts(timestamp - defaultExpiry)
+
 }
 
 func (cs *CheckSampler) flush() (metrics.Series, metrics.SketchSeriesList) {
@@ -172,7 +177,7 @@ func (cs *CheckSampler) flush() (metrics.Series, metrics.SketchSeriesList) {
 
 	// sketches
 	sketches := cs.sketches
-	cs.sketches = make([]metrics.SketchSeries, 0)
+	cs.sketches = make(metrics.SketchSeriesList, 0)
 
 	// garbage collect unused bucket deltas
 	now := time.Now()
@@ -182,6 +187,5 @@ func (cs *CheckSampler) flush() (metrics.Series, metrics.SketchSeriesList) {
 			delete(cs.lastBucketValue, ctxKey)
 		}
 	}
-
 	return series, sketches
 }

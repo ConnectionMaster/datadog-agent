@@ -1,11 +1,12 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package processor
 
 import (
+	"context"
 	"sync"
 
 	"github.com/DataDog/datadog-agent/pkg/util/log"
@@ -53,16 +54,21 @@ func (p *Processor) Stop() {
 }
 
 // Flush processes synchronously the messages that this processor has to process.
-func (p *Processor) Flush() {
+func (p *Processor) Flush(ctx context.Context) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	for {
-		if len(p.inputChan) == 0 {
-			break
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			if len(p.inputChan) == 0 {
+				return
+			}
+			msg := <-p.inputChan
+			p.processMessage(msg)
 		}
-		msg := <-p.inputChan
-		p.processMessage(msg)
 	}
-	p.mu.Unlock()
 }
 
 // run starts the processing of the inputChan
@@ -84,7 +90,7 @@ func (p *Processor) processMessage(msg *message.Message) {
 		metrics.LogsProcessed.Add(1)
 		metrics.TlmLogsProcessed.Inc()
 
-		p.diagnosticMessageReceiver.HandleMessage(*msg)
+		p.diagnosticMessageReceiver.HandleMessage(*msg, redactedMsg)
 
 		// Encode the message to its final format
 		content, err := p.encoder.Encode(msg, redactedMsg)

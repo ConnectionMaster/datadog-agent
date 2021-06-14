@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build !serverless
 
@@ -265,6 +265,21 @@ func GetHostnameData() (HostnameData, error) {
 						" For more information: https://docs.datadoghq.com/ec2-use-win-prefix-detection", hostName, ec2Hostname)
 				}
 			}
+		}
+	}
+
+	if getAzureHostname, found := hostname.ProviderCatalog["azure"]; found {
+		log.Debug("GetHostname trying Azure metadata...")
+
+		azureHostname, err := getAzureHostname()
+		if err == nil {
+			hostName = azureHostname
+			provider = "azure"
+		} else {
+			expErr := new(expvar.String)
+			expErr.Set(err.Error())
+			hostnameErrors.Set("azure", expErr)
+			log.Debugf("unable to get hostname from Azure: %s", err)
 		}
 	}
 

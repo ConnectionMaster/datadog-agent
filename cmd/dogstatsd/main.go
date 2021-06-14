@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 //go:generate go run ../../pkg/config/render_config.go dogstatsd ../../pkg/config/config_template.yaml ./dist/dogstatsd.yaml
 
@@ -154,6 +154,10 @@ func runAgent(ctx context.Context) (err error) {
 		return
 	}
 
+	if err := util.SetupCoreDump(); err != nil {
+		log.Warnf("Can't setup core dumps: %v, core dumps might not be available after a crash", err)
+	}
+
 	if !config.Datadog.IsSet("api_key") {
 		err = log.Critical("no API key configured, exiting")
 		return
@@ -177,7 +181,7 @@ func runAgent(ctx context.Context) (err error) {
 	}
 	f := forwarder.NewDefaultForwarder(forwarder.NewOptions(keysPerDomain))
 	f.Start() //nolint:errcheck
-	s := serializer.NewSerializer(f)
+	s := serializer.NewSerializer(f, nil)
 
 	hname, err := util.GetHostname()
 	if err != nil {
@@ -205,7 +209,7 @@ func runAgent(ctx context.Context) (err error) {
 		tagger.Init()
 	}
 
-	aggregatorInstance := aggregator.InitAggregator(s, hname)
+	aggregatorInstance := aggregator.InitAggregator(s, nil, hname)
 
 	statsd, err = dogstatsd.NewServer(aggregatorInstance, nil)
 	if err != nil {

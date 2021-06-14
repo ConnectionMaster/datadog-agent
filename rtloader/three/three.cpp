@@ -2,7 +2,7 @@
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog
 // (https://www.datadoghq.com/).
-// Copyright 2019-2020 Datadog, Inc.
+// Copyright 2019-present Datadog, Inc.
 #include "three.h"
 
 #include "constants.h"
@@ -435,6 +435,25 @@ done:
     return ret;
 }
 
+void Three::cancelCheck(RtLoaderPyObject *check)
+{
+    if (check == NULL) {
+        return;
+    }
+
+    PyObject *py_check = reinterpret_cast<PyObject *>(check);
+
+    char cancel[] = "cancel";
+    PyObject *result = NULL;
+
+    result = PyObject_CallMethod(py_check, cancel, NULL);
+    // at least None should be returned
+    if (result == NULL) {
+        setError("error invoking 'cancel' method: " + _fetchPythonError());
+    }
+    Py_XDECREF(result);
+}
+
 char **Three::getCheckWarnings(RtLoaderPyObject *check)
 {
     if (check == NULL) {
@@ -804,6 +823,11 @@ void Three::setSubmitEventCb(cb_submit_event_t cb)
 void Three::setSubmitHistogramBucketCb(cb_submit_histogram_bucket_t cb)
 {
     _set_submit_histogram_bucket_cb(cb);
+}
+
+void Three::setSubmitEventPlatformEventCb(cb_submit_event_platform_event_t cb)
+{
+    _set_submit_event_platform_event_cb(cb);
 }
 
 void Three::setGetVersionCb(cb_get_version_t cb)

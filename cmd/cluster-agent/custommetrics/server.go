@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2017-2020 Datadog, Inc.
+// Copyright 2017-present Datadog, Inc.
 
 // +build kubeapiserver
 
@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/kubernetes-incubator/custom-metrics-apiserver/pkg/apiserver"
-	basecmd "github.com/kubernetes-incubator/custom-metrics-apiserver/pkg/cmd"
-	"github.com/kubernetes-incubator/custom-metrics-apiserver/pkg/provider"
+	"github.com/kubernetes-sigs/custom-metrics-apiserver/pkg/apiserver"
+	basecmd "github.com/kubernetes-sigs/custom-metrics-apiserver/pkg/cmd"
+	"github.com/kubernetes-sigs/custom-metrics-apiserver/pkg/provider"
 	"github.com/spf13/pflag"
 
 	"github.com/DataDog/datadog-agent/pkg/clusteragent/custommetrics"
@@ -38,8 +38,12 @@ const (
 )
 
 // RunServer creates and start a k8s custom metrics API server
-func RunServer(ctx context.Context) error {
+func RunServer(ctx context.Context, apiCl *as.APIClient) error {
 	defer clearServerResources()
+	if apiCl == nil {
+		return fmt.Errorf("unable to run server with nil APIClient")
+	}
+
 	cmd = &DatadogMetricsAdapter{}
 	cmd.Name = "datadog-custom-metrics-adapter"
 	cmd.FlagSet = pflag.NewFlagSet(cmd.Name, pflag.ExitOnError)
@@ -53,7 +57,7 @@ func RunServer(ctx context.Context) error {
 		return err
 	}
 
-	provider, err := cmd.makeProviderOrDie(ctx)
+	provider, err := cmd.makeProviderOrDie(ctx, apiCl)
 	if err != nil {
 		return err
 	}
@@ -74,15 +78,10 @@ func RunServer(ctx context.Context) error {
 	return server.GenericAPIServer.PrepareRun().Run(ctx.Done())
 }
 
-func (a *DatadogMetricsAdapter) makeProviderOrDie(ctx context.Context) (provider.ExternalMetricsProvider, error) {
+func (a *DatadogMetricsAdapter) makeProviderOrDie(ctx context.Context, apiCl *as.APIClient) (provider.ExternalMetricsProvider, error) {
 	client, err := a.DynamicClient()
 	if err != nil {
 		log.Infof("Unable to construct dynamic client: %v", err)
-		return nil, err
-	}
-	apiCl, err := as.GetAPIClient()
-	if err != nil {
-		log.Errorf("Could not build API Client: %v", err)
 		return nil, err
 	}
 

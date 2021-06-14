@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2021 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package autodiscovery
 
@@ -39,6 +39,11 @@ func DiscoverComponentsFromEnv() ([]config.ConfigurationProviders, []config.List
 	// When using automatic discovery of providers/listeners
 	// We automatically activate the environment listener
 	detectedListeners = append(detectedListeners, config.Listeners{Name: "environment"})
+
+	// Automatic handling of AD providers/listeners should only run in Core agent.
+	if flavor.GetFlavor() != flavor.DefaultAgent {
+		return detectedProviders, detectedListeners
+	}
 
 	if config.IsFeaturePresent(config.Docker) {
 		detectedProviders = append(detectedProviders, config.ConfigurationProviders{Name: "docker", Polling: true, PollInterval: "1s"})

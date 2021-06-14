@@ -2,7 +2,7 @@
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog
 // (https://www.datadoghq.com/).
-// Copyright 2019-2020 Datadog, Inc.
+// Copyright 2019-present Datadog, Inc.
 #ifndef DATADOG_AGENT_RTLOADER_TWO_H
 #define DATADOG_AGENT_RTLOADER_TWO_H
 
@@ -66,6 +66,7 @@ public:
                   RtLoaderPyObject *&check);
 
     char *runCheck(RtLoaderPyObject *check);
+    void cancelCheck(RtLoaderPyObject *check);
     char **getCheckWarnings(RtLoaderPyObject *check);
     void decref(RtLoaderPyObject *obj);
     void incref(RtLoaderPyObject *obj);
@@ -89,6 +90,7 @@ public:
     void setSubmitServiceCheckCb(cb_submit_service_check_t);
     void setSubmitEventCb(cb_submit_event_t);
     void setSubmitHistogramBucketCb(cb_submit_histogram_bucket_t);
+    void setSubmitEventPlatformEventCb(cb_submit_event_platform_event_t);
 
     // datadog_agent API
     void setGetVersionCb(cb_get_version_t);

@@ -8,7 +8,7 @@ import (
 
 	"github.com/DataDog/datadog-agent/pkg/network/http"
 	"github.com/DataDog/datadog-agent/pkg/process/util"
-	"github.com/dustin/go-humanize"
+	humanize "github.com/dustin/go-humanize"
 )
 
 // ConnectionType will be either TCP or UDP
@@ -79,12 +79,14 @@ func (d ConnectionDirection) String() string {
 
 // Connections wraps a collection of ConnectionStats
 type Connections struct {
-	DNS       map[util.Address][]string
-	Conns     []ConnectionStats
-	Telemetry *ConnectionsTelemetry
+	DNS                         map[util.Address][]string
+	Conns                       []ConnectionStats
+	ConnTelemetry               *ConnectionsTelemetry
+	CompilationTelemetryByAsset map[string]RuntimeCompilationTelemetry
+	HTTP                        map[http.Key]http.RequestStats
 }
 
-// ConnectionsTelemetry stores telemetry from the system probe
+// ConnectionsTelemetry stores telemetry from the system probe related to connections collection
 type ConnectionsTelemetry struct {
 	MonotonicKprobesTriggered          int64
 	MonotonicKprobesMissed             int64
@@ -96,6 +98,14 @@ type ConnectionsTelemetry struct {
 	MonotonicUDPSendsProcessed         int64
 	MonotonicUDPSendsMissed            int64
 	ConntrackSamplingPercent           int64
+	DNSStatsDropped                    int64
+}
+
+// RuntimeCompilationTelemetry stores telemetry related to the runtime compilation of various assets
+type RuntimeCompilationTelemetry struct {
+	RuntimeCompilationEnabled  bool
+	RuntimeCompilationResult   int32
+	RuntimeCompilationDuration int64
 }
 
 // ConnectionStats stores statistics for a single connection.  Field order in the struct should be 8-byte aligned
@@ -108,6 +118,12 @@ type ConnectionStats struct {
 
 	MonotonicRecvBytes uint64
 	LastRecvBytes      uint64
+
+	MonotonicSentPackets uint64
+	LastSentPackets      uint64
+
+	MonotonicRecvPackets uint64
+	LastRecvPackets      uint64
 
 	// Last time the stats for this connection were updated
 	LastUpdateEpoch uint64
@@ -147,7 +163,18 @@ type ConnectionStats struct {
 	DNSFailureLatencySum   uint64
 	DNSCountByRcode        map[uint32]uint32
 	DNSStatsByDomain       map[string]DNSStats
-	HTTPStatsByPath        map[string]http.RequestStats
+
+	Via *Via
+}
+
+// Via has info about the routing decision for a flow
+type Via struct {
+	Subnet Subnet
+}
+
+// Subnet stores info about a subnet
+type Subnet struct {
+	Alias string
 }
 
 // IPTranslation can be associated with a connection to show the connection is NAT'd

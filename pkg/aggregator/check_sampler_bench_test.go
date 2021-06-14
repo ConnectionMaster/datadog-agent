@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package aggregator
 
@@ -22,8 +22,9 @@ func benchmarkAddBucket(bucketValue int64, b *testing.B) {
 	// but this do.
 	aggregatorInstance.serializer = serializer.NewSerializer(forwarder.NewDefaultForwarder(
 		forwarder.NewOptions(map[string][]string{"hello": {"world"}})),
+		nil,
 	)
-	checkSampler := newCheckSampler()
+	checkSampler := newCheckSampler(60 * time.Second)
 
 	bucket := &metrics.HistogramBucket{
 		Name:       "my.histogram",
@@ -43,7 +44,7 @@ func benchmarkAddBucket(bucketValue int64, b *testing.B) {
 }
 
 func benchmarkAddBucketWideBounds(bucketValue int64, b *testing.B) {
-	checkSampler := newCheckSampler()
+	checkSampler := newCheckSampler(60 * time.Second)
 
 	bounds := []float64{0, .0005, .001, .003, .005, .007, .01, .015, .02, .025, .03, .04, .05, .06, .07, .08, .09, .1, .5, 1, 5, 10}
 	bucket := &metrics.HistogramBucket{

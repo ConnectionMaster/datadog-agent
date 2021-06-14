@@ -1,6 +1,8 @@
 import datetime
+import glob
 import os
 import shutil
+import sys
 
 from invoke import task
 
@@ -9,16 +11,19 @@ from .go import generate
 from .utils import (
     REPO_PATH,
     bin_name,
+    bundle_files,
+    generate_config,
     get_build_flags,
     get_git_branch_name,
     get_git_commit,
     get_go_version,
     get_gopath,
     get_version,
+    get_version_numeric_only,
 )
 
-BIN_DIR = os.path.join(".", "bin", "security-agent")
-BIN_PATH = os.path.join(BIN_DIR, bin_name("security-agent", android=False))
+BIN_DIR = os.path.join(".", "bin")
+BIN_PATH = os.path.join(BIN_DIR, "security-agent", bin_name("security-agent", android=False))
 GIMME_ENV_VARS = ['GOROOT', 'PATH']
 
 
@@ -45,14 +50,37 @@ def build(
     go_version=None,
     incremental_build=False,
     major_version='7',
-    arch="x64",
-    go_mod="vendor",
+    # arch is never used here; we keep it to have a
+    # consistent CLI on the build task for all agents.
+    arch="x64",  # noqa: U100
+    go_mod="mod",
     skip_assets=False,
 ):
     """
     Build the security agent
     """
-    ldflags, gcflags, env = get_build_flags(ctx, arch=arch, major_version=major_version, python_runtimes='3')
+    ldflags, gcflags, env = get_build_flags(ctx, major_version=major_version, python_runtimes='3')
+
+    # generate windows resources
+    if sys.platform == 'win32':
+        windres_target = "pe-x86-64"
+        if arch == "x86":
+            env["GOARCH"] = "386"
+            windres_target = "pe-i386"
+
+        ver = get_version_numeric_only(ctx, major_version=major_version)
+        maj_ver, min_ver, patch_ver = ver.split(".")
+
+        ctx.run(
+            "windmc --target {target_arch}  -r cmd/security-agent/windows_resources cmd/security-agent/windows_resources/security-agent-msg.mc".format(
+                target_arch=windres_target
+            )
+        )
+        ctx.run(
+            "windres --define MAJ_VER={maj_ver} --define MIN_VER={min_ver} --define PATCH_VER={patch_ver} -i cmd/security-agent/windows_resources/security-agent.rc --target {target_arch} -O coff -o cmd/security-agent/rsrc.syso".format(
+                maj_ver=maj_ver, min_ver=min_ver, patch_ver=patch_ver, target_arch=windres_target
+            )
+        )
 
     # TODO use pkg/version for this
     main = "main."
@@ -104,9 +132,9 @@ def build(
     ctx.run(cmd.format(**args), env=env)
 
     if not skip_assets:
-        dist_folder = os.path.join(BIN_DIR, "dist", "runtime-security.d")
-        if not os.path.exists(dist_folder):
-            os.makedirs(dist_folder)
+        dist_folder = os.path.join(BIN_DIR, "agent", "dist")
+        generate_config(ctx, build_type="security-agent", output_file="./cmd/agent/dist/security-agent.yaml", env=env)
+        shutil.copy("./cmd/agent/dist/security-agent.yaml", os.path.join(dist_folder, "security-agent.yaml"))
 
 
 @task()
@@ -114,11 +142,6 @@ def gen_mocks(ctx):
     """
     Generate mocks.
     """
-
-    gopath = get_gopath(ctx)
-    if not os.path.exists(os.path.join(gopath, "bin/mockery")):
-        with ctx.cd(gopath):
-            ctx.run("go get -u github.com/vektra/mockery/cmd/mockery", env={'GO111MODULE': 'on'})
 
     with ctx.cd("./pkg/compliance"):
         ctx.run("./gen_mocks.sh")
@@ -151,8 +174,9 @@ def build_functional_tests(
     major_version='7',
     build_tags='functionaltests',
     bundle_ebpf=True,
+    static=False,
 ):
-    ldflags, gcflags, env = get_build_flags(ctx, arch=arch, major_version=major_version)
+    ldflags, gcflags, env = get_build_flags(ctx, major_version=major_version)
 
     goenv = get_go_env(ctx, go_version)
     env.update(goenv)
@@ -165,11 +189,27 @@ def build_functional_tests(
     if bundle_ebpf:
         build_tags = "ebpf_bindata," + build_tags
 
-    cmd = 'go test -tags {build_tags} -c -o {output} '
+    if static:
+        ldflags += '-extldflags "-static"'
+        build_tags += ',osusergo,netgo'
+
+    bindata_files = glob.glob("pkg/security/tests/schemas/*.json")
+    bundle_files(
+        ctx,
+        bindata_files,
+        "pkg/security/tests/schemas",
+        "pkg/security/tests/schemas/schemas.go",
+        "schemas",
+        "functionaltests",
+        False,
+    )
+
+    cmd = 'go test -mod=mod -tags {build_tags} -ldflags="{ldflags}" -c -o {output} '
     cmd += '{repo_path}/pkg/security/tests'
 
     args = {
         "output": output,
+        "ldflags": ldflags,
         "build_tags": build_tags,
         "repo_path": REPO_PATH,
     }
@@ -282,7 +322,7 @@ def docker_functional_tests(
     container_name = 'security-agent-tests'
     capabilities = ['SYS_ADMIN', 'SYS_RESOURCE', 'SYS_PTRACE', 'NET_ADMIN', 'IPC_LOCK', 'ALL']
 
-    cmd = 'docker run --name {container_name} {caps} --privileged -d '
+    cmd = 'docker run --name {container_name} {caps} --privileged -d --pid=host '
     cmd += '-v /proc:/host/proc -e HOST_PROC=/host/proc '
     cmd += '-v {GOPATH}/src/{REPO_PATH}/pkg/security/tests:/tests debian:bullseye sleep 3600'
 

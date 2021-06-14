@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package metadata
 
@@ -29,7 +29,7 @@ func (rp *ResourcesCollector) Send(s *serializer.Serializer) error {
 	payload := map[string]interface{}{
 		"resources": resources.GetPayload(hostname),
 	}
-	if err := s.SendJSONToV1Intake(payload); err != nil {
+	if err := s.SendProcessesMetadata(payload); err != nil {
 		return fmt.Errorf("unable to serialize processes metadata payload, %s", err)
 	}
 	return nil

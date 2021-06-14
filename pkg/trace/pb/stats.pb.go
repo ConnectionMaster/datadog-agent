@@ -8,18 +8,24 @@
 		stats.proto
 
 	It has these top-level messages:
+		StatsPayload
 		ClientStatsPayload
 		ClientStatsBucket
 		ClientGroupedStats
 */
 package pb
 
-import proto "github.com/gogo/protobuf/proto"
-import fmt "fmt"
-import math "math"
-import _ "github.com/gogo/protobuf/gogoproto"
+import (
+	fmt "fmt"
 
-import io "io"
+	proto "github.com/gogo/protobuf/proto"
+
+	math "math"
+
+	_ "github.com/gogo/protobuf/gogoproto"
+
+	io "io"
+)
 
 // Reference imports to suppress errors if they are not otherwise used.
 var _ = proto.Marshal
@@ -32,18 +38,52 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.GoGoProtoPackageIsVersion2 // please upgrade the proto package
 
-// TODO(gbbr): doc
+// StatsPayload is the payload used to send stats from the agent to the backend.
+type StatsPayload struct {
+	AgentHostname  string               `protobuf:"bytes,1,opt,name=agentHostname,proto3" json:"agentHostname,omitempty"`
+	AgentEnv       string               `protobuf:"bytes,2,opt,name=agentEnv,proto3" json:"agentEnv,omitempty"`
+	Stats          []ClientStatsPayload `protobuf:"bytes,3,rep,name=stats" json:"stats"`
+	AgentVersion   string               `protobuf:"bytes,4,opt,name=agentVersion,proto3" json:"agentVersion,omitempty"`
+	ClientComputed bool                 `protobuf:"varint,5,opt,name=clientComputed,proto3" json:"clientComputed,omitempty"`
+}
+
+func (m *StatsPayload) Reset()                    { *m = StatsPayload{} }
+func (m *StatsPayload) String() string            { return proto.CompactTextString(m) }
+func (*StatsPayload) ProtoMessage()               {}
+func (*StatsPayload) Descriptor() ([]byte, []int) { return fileDescriptorStats, []int{0} }
+
+func (m *StatsPayload) GetStats() []ClientStatsPayload {
+	if m != nil {
+		return m.Stats
+	}
+	return nil
+}
+
+// ClientStatsPayload is the first layer of span stats aggregation. It is also
+// the payload sent by tracers to the agent when stats in tracer are enabled.
 type ClientStatsPayload struct {
-	Hostname string              `protobuf:"bytes,1,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	Env      string              `protobuf:"bytes,2,opt,name=env,proto3" json:"env,omitempty"`
-	Version  string              `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	Stats    []ClientStatsBucket `protobuf:"bytes,4,rep,name=stats" json:"stats"`
+	// hostname is the tracer hostname. It's extracted from spans with "_dd.hostname" meta
+	// or set by tracer stats payload when hostname reporting is enabled.
+	Hostname      string              `protobuf:"bytes,1,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Env           string              `protobuf:"bytes,2,opt,name=env,proto3" json:"env,omitempty"`
+	Version       string              `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	Stats         []ClientStatsBucket `protobuf:"bytes,4,rep,name=stats" json:"stats"`
+	Lang          string              `protobuf:"bytes,5,opt,name=lang,proto3" json:"lang,omitempty"`
+	TracerVersion string              `protobuf:"bytes,6,opt,name=tracerVersion,proto3" json:"tracerVersion,omitempty"`
+	RuntimeID     string              `protobuf:"bytes,7,opt,name=runtimeID,proto3" json:"runtimeID,omitempty"`
+	Sequence      uint64              `protobuf:"varint,8,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	// agentAggregation is set by the agent on tracer payloads modified by the agent aggregation layer
+	// characterizes counts only and distributions only payloads
+	AgentAggregation string `protobuf:"bytes,9,opt,name=agentAggregation,proto3" json:"agentAggregation,omitempty"`
+	// service is the main service of the tracer.
+	// It is part of unified tagging: https://docs.datadoghq.com/getting_started/tagging/unified_service_tagging
+	Service string `protobuf:"bytes,10,opt,name=service,proto3" json:"service,omitempty"`
 }
 
 func (m *ClientStatsPayload) Reset()                    { *m = ClientStatsPayload{} }
 func (m *ClientStatsPayload) String() string            { return proto.CompactTextString(m) }
 func (*ClientStatsPayload) ProtoMessage()               {}
-func (*ClientStatsPayload) Descriptor() ([]byte, []int) { return fileDescriptorStats, []int{0} }
+func (*ClientStatsPayload) Descriptor() ([]byte, []int) { return fileDescriptorStats, []int{1} }
 
 func (m *ClientStatsPayload) GetStats() []ClientStatsBucket {
 	if m != nil {
@@ -52,17 +92,20 @@ func (m *ClientStatsPayload) GetStats() []ClientStatsBucket {
 	return nil
 }
 
-// TODO(gbbr): doc
+// ClientStatsBucket is a time bucket containing aggregated stats.
 type ClientStatsBucket struct {
 	Start    uint64               `protobuf:"varint,1,opt,name=start,proto3" json:"start,omitempty"`
 	Duration uint64               `protobuf:"varint,2,opt,name=duration,proto3" json:"duration,omitempty"`
 	Stats    []ClientGroupedStats `protobuf:"bytes,3,rep,name=stats" json:"stats"`
+	// agentTimeShift is the shift applied by the agent stats aggregator on bucket start
+	// when the received bucket start is outside of the agent aggregation window
+	AgentTimeShift int64 `protobuf:"varint,4,opt,name=agentTimeShift,proto3" json:"agentTimeShift,omitempty"`
 }
 
 func (m *ClientStatsBucket) Reset()                    { *m = ClientStatsBucket{} }
 func (m *ClientStatsBucket) String() string            { return proto.CompactTextString(m) }
 func (*ClientStatsBucket) ProtoMessage()               {}
-func (*ClientStatsBucket) Descriptor() ([]byte, []int) { return fileDescriptorStats, []int{1} }
+func (*ClientStatsBucket) Descriptor() ([]byte, []int) { return fileDescriptorStats, []int{2} }
 
 func (m *ClientStatsBucket) GetStats() []ClientGroupedStats {
 	if m != nil {
@@ -71,7 +114,7 @@ func (m *ClientStatsBucket) GetStats() []ClientGroupedStats {
 	return nil
 }
 
-// TODO(gbbr): doc
+// ClientGroupedStats aggregate stats on spans grouped by service, name, resource, status_code, type
 type ClientGroupedStats struct {
 	Service        string `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
 	Name           string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
@@ -85,18 +128,78 @@ type ClientGroupedStats struct {
 	OkSummary      []byte `protobuf:"bytes,10,opt,name=okSummary,proto3" json:"okSummary,omitempty"`
 	ErrorSummary   []byte `protobuf:"bytes,11,opt,name=errorSummary,proto3" json:"errorSummary,omitempty"`
 	Synthetics     bool   `protobuf:"varint,12,opt,name=synthetics,proto3" json:"synthetics,omitempty"`
+	TopLevelHits   uint64 `protobuf:"varint,13,opt,name=topLevelHits,proto3" json:"topLevelHits,omitempty"`
 }
 
 func (m *ClientGroupedStats) Reset()                    { *m = ClientGroupedStats{} }
 func (m *ClientGroupedStats) String() string            { return proto.CompactTextString(m) }
 func (*ClientGroupedStats) ProtoMessage()               {}
-func (*ClientGroupedStats) Descriptor() ([]byte, []int) { return fileDescriptorStats, []int{2} }
+func (*ClientGroupedStats) Descriptor() ([]byte, []int) { return fileDescriptorStats, []int{3} }
 
 func init() {
+	proto.RegisterType((*StatsPayload)(nil), "pb.StatsPayload")
 	proto.RegisterType((*ClientStatsPayload)(nil), "pb.ClientStatsPayload")
 	proto.RegisterType((*ClientStatsBucket)(nil), "pb.ClientStatsBucket")
 	proto.RegisterType((*ClientGroupedStats)(nil), "pb.ClientGroupedStats")
 }
+func (m *StatsPayload) Marshal() (data []byte, err error) {
+	size := m.Size()
+	data = make([]byte, size)
+	n, err := m.MarshalTo(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (m *StatsPayload) MarshalTo(data []byte) (int, error) {
+	var i int
+	_ = i
+	var l int
+	_ = l
+	if len(m.AgentHostname) > 0 {
+		data[i] = 0xa
+		i++
+		i = encodeVarintStats(data, i, uint64(len(m.AgentHostname)))
+		i += copy(data[i:], m.AgentHostname)
+	}
+	if len(m.AgentEnv) > 0 {
+		data[i] = 0x12
+		i++
+		i = encodeVarintStats(data, i, uint64(len(m.AgentEnv)))
+		i += copy(data[i:], m.AgentEnv)
+	}
+	if len(m.Stats) > 0 {
+		for _, msg := range m.Stats {
+			data[i] = 0x1a
+			i++
+			i = encodeVarintStats(data, i, uint64(msg.Size()))
+			n, err := msg.MarshalTo(data[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
+	}
+	if len(m.AgentVersion) > 0 {
+		data[i] = 0x22
+		i++
+		i = encodeVarintStats(data, i, uint64(len(m.AgentVersion)))
+		i += copy(data[i:], m.AgentVersion)
+	}
+	if m.ClientComputed {
+		data[i] = 0x28
+		i++
+		if m.ClientComputed {
+			data[i] = 1
+		} else {
+			data[i] = 0
+		}
+		i++
+	}
+	return i, nil
+}
+
 func (m *ClientStatsPayload) Marshal() (data []byte, err error) {
 	size := m.Size()
 	data = make([]byte, size)
@@ -142,6 +245,41 @@ func (m *ClientStatsPayload) MarshalTo(data []byte) (int, error) {
 			i += n
 		}
 	}
+	if len(m.Lang) > 0 {
+		data[i] = 0x2a
+		i++
+		i = encodeVarintStats(data, i, uint64(len(m.Lang)))
+		i += copy(data[i:], m.Lang)
+	}
+	if len(m.TracerVersion) > 0 {
+		data[i] = 0x32
+		i++
+		i = encodeVarintStats(data, i, uint64(len(m.TracerVersion)))
+		i += copy(data[i:], m.TracerVersion)
+	}
+	if len(m.RuntimeID) > 0 {
+		data[i] = 0x3a
+		i++
+		i = encodeVarintStats(data, i, uint64(len(m.RuntimeID)))
+		i += copy(data[i:], m.RuntimeID)
+	}
+	if m.Sequence != 0 {
+		data[i] = 0x40
+		i++
+		i = encodeVarintStats(data, i, uint64(m.Sequence))
+	}
+	if len(m.AgentAggregation) > 0 {
+		data[i] = 0x4a
+		i++
+		i = encodeVarintStats(data, i, uint64(len(m.AgentAggregation)))
+		i += copy(data[i:], m.AgentAggregation)
+	}
+	if len(m.Service) > 0 {
+		data[i] = 0x52
+		i++
+		i = encodeVarintStats(data, i, uint64(len(m.Service)))
+		i += copy(data[i:], m.Service)
+	}
 	return i, nil
 }
 
@@ -181,6 +319,11 @@ func (m *ClientStatsBucket) MarshalTo(data []byte) (int, error) {
 			}
 			i += n
 		}
+	}
+	if m.AgentTimeShift != 0 {
+		data[i] = 0x20
+		i++
+		i = encodeVarintStats(data, i, uint64(m.AgentTimeShift))
 	}
 	return i, nil
 }
@@ -272,6 +415,11 @@ func (m *ClientGroupedStats) MarshalTo(data []byte) (int, error) {
 		}
 		i++
 	}
+	if m.TopLevelHits != 0 {
+		data[i] = 0x68
+		i++
+		i = encodeVarintStats(data, i, uint64(m.TopLevelHits))
+	}
 	return i, nil
 }
 
@@ -302,6 +450,33 @@ func encodeVarintStats(data []byte, offset int, v uint64) int {
 	data[offset] = uint8(v)
 	return offset + 1
 }
+func (m *StatsPayload) Size() (n int) {
+	var l int
+	_ = l
+	l = len(m.AgentHostname)
+	if l > 0 {
+		n += 1 + l + sovStats(uint64(l))
+	}
+	l = len(m.AgentEnv)
+	if l > 0 {
+		n += 1 + l + sovStats(uint64(l))
+	}
+	if len(m.Stats) > 0 {
+		for _, e := range m.Stats {
+			l = e.Size()
+			n += 1 + l + sovStats(uint64(l))
+		}
+	}
+	l = len(m.AgentVersion)
+	if l > 0 {
+		n += 1 + l + sovStats(uint64(l))
+	}
+	if m.ClientComputed {
+		n += 2
+	}
+	return n
+}
+
 func (m *ClientStatsPayload) Size() (n int) {
 	var l int
 	_ = l
@@ -323,6 +498,29 @@ func (m *ClientStatsPayload) Size() (n int) {
 			n += 1 + l + sovStats(uint64(l))
 		}
 	}
+	l = len(m.Lang)
+	if l > 0 {
+		n += 1 + l + sovStats(uint64(l))
+	}
+	l = len(m.TracerVersion)
+	if l > 0 {
+		n += 1 + l + sovStats(uint64(l))
+	}
+	l = len(m.RuntimeID)
+	if l > 0 {
+		n += 1 + l + sovStats(uint64(l))
+	}
+	if m.Sequence != 0 {
+		n += 1 + sovStats(uint64(m.Sequence))
+	}
+	l = len(m.AgentAggregation)
+	if l > 0 {
+		n += 1 + l + sovStats(uint64(l))
+	}
+	l = len(m.Service)
+	if l > 0 {
+		n += 1 + l + sovStats(uint64(l))
+	}
 	return n
 }
 
@@ -340,6 +538,9 @@ func (m *ClientStatsBucket) Size() (n int) {
 			l = e.Size()
 			n += 1 + l + sovStats(uint64(l))
 		}
+	}
+	if m.AgentTimeShift != 0 {
+		n += 1 + sovStats(uint64(m.AgentTimeShift))
 	}
 	return n
 }
@@ -390,6 +591,9 @@ func (m *ClientGroupedStats) Size() (n int) {
 	if m.Synthetics {
 		n += 2
 	}
+	if m.TopLevelHits != 0 {
+		n += 1 + sovStats(uint64(m.TopLevelHits))
+	}
 	return n
 }
 
@@ -405,6 +609,194 @@ func sovStats(x uint64) (n int) {
 }
 func sozStats(x uint64) (n int) {
 	return sovStats(uint64((x << 1) ^ uint64((int64(x) >> 63))))
+}
+func (m *StatsPayload) Unmarshal(data []byte) error {
+	l := len(data)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowStats
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := data[iNdEx]
+			iNdEx++
+			wire |= (uint64(b) & 0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: StatsPayload: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: StatsPayload: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AgentHostname", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthStats
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AgentHostname = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AgentEnv", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthStats
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AgentEnv = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Stats", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				msglen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthStats
+			}
+			postIndex := iNdEx + msglen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Stats = append(m.Stats, ClientStatsPayload{})
+			if err := m.Stats[len(m.Stats)-1].Unmarshal(data[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AgentVersion", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthStats
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AgentVersion = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ClientComputed", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				v |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.ClientComputed = bool(v != 0)
+		default:
+			iNdEx = preIndex
+			skippy, err := skipStats(data[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if skippy < 0 {
+				return ErrInvalidLengthStats
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }
 func (m *ClientStatsPayload) Unmarshal(data []byte) error {
 	l := len(data)
@@ -553,6 +945,170 @@ func (m *ClientStatsPayload) Unmarshal(data []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Lang", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthStats
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Lang = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TracerVersion", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthStats
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TracerVersion = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RuntimeID", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthStats
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RuntimeID = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Sequence", wireType)
+			}
+			m.Sequence = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				m.Sequence |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AgentAggregation", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthStats
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AgentAggregation = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 10:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Service", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthStats
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Service = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipStats(data[iNdEx:])
@@ -672,6 +1228,25 @@ func (m *ClientStatsBucket) Unmarshal(data []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AgentTimeShift", wireType)
+			}
+			m.AgentTimeShift = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				m.AgentTimeShift |= (int64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipStats(data[iNdEx:])
@@ -1025,6 +1600,25 @@ func (m *ClientGroupedStats) Unmarshal(data []byte) error {
 				}
 			}
 			m.Synthetics = bool(v != 0)
+		case 13:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TopLevelHits", wireType)
+			}
+			m.TopLevelHits = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowStats
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				m.TopLevelHits |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipStats(data[iNdEx:])
@@ -1154,32 +1748,43 @@ var (
 func init() { proto.RegisterFile("stats.proto", fileDescriptorStats) }
 
 var fileDescriptorStats = []byte{
-	// 419 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x64, 0x52, 0xcb, 0x6e, 0xd3, 0x40,
-	0x14, 0xed, 0x24, 0x6e, 0x1e, 0x37, 0x01, 0x85, 0x2b, 0x28, 0xa3, 0x0a, 0x19, 0x2b, 0x2b, 0x6f,
-	0x48, 0x45, 0xf9, 0x03, 0xb7, 0x12, 0x2c, 0x2b, 0x27, 0xfb, 0xc8, 0x8f, 0x21, 0xb1, 0x5a, 0x7b,
-	0xac, 0x79, 0x44, 0xf2, 0x57, 0xc0, 0x67, 0x75, 0xc9, 0x17, 0x00, 0x0a, 0x3f, 0x82, 0xe6, 0xba,
-	0x4e, 0x13, 0xd8, 0xdd, 0x73, 0xee, 0xf1, 0x39, 0xd7, 0x47, 0x03, 0x13, 0x6d, 0x12, 0xa3, 0x17,
-	0xb5, 0x92, 0x46, 0x62, 0xaf, 0x4e, 0x2f, 0x3f, 0x6c, 0x0a, 0xb3, 0xb5, 0xe9, 0x22, 0x93, 0xe5,
-	0xd5, 0x46, 0x6e, 0xe4, 0x15, 0xad, 0x52, 0xfb, 0x95, 0x10, 0x01, 0x9a, 0xda, 0x4f, 0xe6, 0xdf,
-	0x18, 0xe0, 0xcd, 0x43, 0x21, 0x2a, 0xb3, 0x74, 0x46, 0x77, 0x49, 0xf3, 0x20, 0x93, 0x1c, 0x2f,
-	0x61, 0xb4, 0x95, 0xda, 0x54, 0x49, 0x29, 0x38, 0x0b, 0x58, 0x38, 0x8e, 0x0f, 0x18, 0x67, 0xd0,
-	0x17, 0xd5, 0x8e, 0xf7, 0x88, 0x76, 0x23, 0x72, 0x18, 0xee, 0x84, 0xd2, 0x85, 0xac, 0x78, 0x9f,
-	0xd8, 0x0e, 0xe2, 0x47, 0x38, 0xa7, 0x03, 0xb9, 0x17, 0xf4, 0xc3, 0xc9, 0xf5, 0x9b, 0x45, 0x9d,
-	0x2e, 0x8e, 0xe2, 0x22, 0x9b, 0xdd, 0x0b, 0x13, 0x79, 0x8f, 0x3f, 0xdf, 0x9f, 0xc5, 0xad, 0x72,
-	0xde, 0xc0, 0xab, 0xff, 0x14, 0xf8, 0x9a, 0x7c, 0x94, 0xa1, 0x63, 0xbc, 0xb8, 0x05, 0xee, 0xca,
-	0xdc, 0xaa, 0xc4, 0xb8, 0xe0, 0x1e, 0x2d, 0x0e, 0x18, 0xaf, 0xbb, 0xe4, 0x3e, 0x25, 0x5f, 0x3c,
-	0x27, 0x7f, 0x56, 0xd2, 0xd6, 0x22, 0x6f, 0xed, 0x4f, 0xa2, 0x7f, 0xf5, 0xba, 0x32, 0x8e, 0x35,
-	0xee, 0xf7, 0xb4, 0x50, 0xbb, 0x22, 0xeb, 0xba, 0xe8, 0x20, 0x22, 0x78, 0x54, 0x51, 0xdb, 0x05,
-	0xcd, 0xee, 0x28, 0x25, 0xb4, 0xb4, 0x2a, 0x13, 0x4f, 0x6d, 0x1c, 0x30, 0x86, 0x30, 0xfb, 0xb2,
-	0x5a, 0xdd, 0xad, 0x5d, 0x9c, 0xd5, 0xeb, 0x4c, 0xe6, 0x82, 0x7b, 0x01, 0x0b, 0x5f, 0xc4, 0x2f,
-	0x1d, 0xbf, 0x24, 0xfa, 0x46, 0xe6, 0xe4, 0x6c, 0x9a, 0x5a, 0xf0, 0xf3, 0xd6, 0xd9, 0xcd, 0xf8,
-	0x16, 0x86, 0xb7, 0xd1, 0x9a, 0xe8, 0x01, 0xd1, 0x83, 0xdb, 0x68, 0xe5, 0x16, 0x08, 0xde, 0xb6,
-	0x30, 0x9a, 0x0f, 0xa9, 0x03, 0x9a, 0xf1, 0x02, 0x06, 0x42, 0x29, 0xa9, 0x34, 0x1f, 0x11, 0xfb,
-	0x84, 0x4e, 0x3a, 0x1b, 0xff, 0xd3, 0xd9, 0x3b, 0x18, 0xcb, 0xfb, 0xa5, 0x2d, 0xcb, 0x44, 0x35,
-	0x1c, 0x02, 0x16, 0x4e, 0xe3, 0x67, 0x02, 0xe7, 0x30, 0x25, 0x8f, 0x4e, 0x30, 0x21, 0xc1, 0x09,
-	0x87, 0x3e, 0x80, 0x6e, 0x2a, 0xb3, 0x15, 0xa6, 0xc8, 0x34, 0x9f, 0x06, 0x2c, 0x1c, 0xc5, 0x47,
-	0x4c, 0x34, 0x7b, 0xdc, 0xfb, 0xec, 0xc7, 0xde, 0x67, 0xbf, 0xf7, 0x3e, 0xfb, 0xfe, 0xc7, 0x3f,
-	0x4b, 0x07, 0xf4, 0x0e, 0x3f, 0xfd, 0x0d, 0x00, 0x00, 0xff, 0xff, 0x1c, 0x79, 0xf1, 0xb5, 0xc9,
-	0x02, 0x00, 0x00,
+	// 593 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x7c, 0x54, 0x51, 0x6e, 0xda, 0x40,
+	0x10, 0x8d, 0xb1, 0x43, 0xe2, 0x09, 0x20, 0xba, 0x6a, 0x53, 0x2b, 0x8a, 0x28, 0x42, 0x55, 0x84,
+	0x2a, 0x95, 0xa8, 0xe9, 0x09, 0x0a, 0x54, 0xa5, 0x52, 0x3f, 0x22, 0x83, 0xfa, 0x8b, 0x8c, 0x3d,
+	0x31, 0x56, 0xb0, 0xd7, 0xdd, 0x5d, 0x23, 0xf1, 0xdd, 0x0b, 0xf4, 0x0a, 0xbd, 0x4d, 0xfa, 0x97,
+	0x13, 0x54, 0x15, 0xbd, 0x48, 0xb5, 0x63, 0x4c, 0x30, 0x48, 0xfd, 0x9b, 0xf7, 0x3c, 0x9e, 0x7d,
+	0x6f, 0xde, 0xda, 0x70, 0x26, 0x95, 0xa7, 0x64, 0x2f, 0x15, 0x5c, 0x71, 0x56, 0x49, 0x67, 0x17,
+	0x6f, 0xc3, 0x48, 0xcd, 0xb3, 0x59, 0xcf, 0xe7, 0xf1, 0x75, 0xc8, 0x43, 0x7e, 0x4d, 0x8f, 0x66,
+	0xd9, 0x1d, 0x21, 0x02, 0x54, 0xe5, 0xaf, 0x74, 0x1e, 0x0d, 0xa8, 0x8d, 0xf5, 0x88, 0x5b, 0x6f,
+	0xb5, 0xe0, 0x5e, 0xc0, 0x5e, 0x43, 0xdd, 0x0b, 0x31, 0x51, 0x23, 0x2e, 0x55, 0xe2, 0xc5, 0xe8,
+	0x18, 0x6d, 0xa3, 0x6b, 0xbb, 0x65, 0x92, 0x5d, 0xc0, 0x29, 0x11, 0x1f, 0x93, 0xa5, 0x53, 0xa1,
+	0x86, 0x2d, 0x66, 0x37, 0x70, 0x4c, 0xa2, 0x1c, 0xb3, 0x6d, 0x76, 0xcf, 0x6e, 0xce, 0x7b, 0xe9,
+	0xac, 0x37, 0x58, 0x44, 0x98, 0xa8, 0xdd, 0x83, 0xfa, 0xd6, 0xc3, 0xef, 0x57, 0x47, 0x6e, 0xde,
+	0xca, 0x3a, 0x50, 0xa3, 0xf7, 0xbf, 0xa2, 0x90, 0x11, 0x4f, 0x1c, 0x8b, 0x66, 0x96, 0x38, 0x76,
+	0x05, 0x0d, 0x9f, 0xc6, 0x0c, 0x78, 0x9c, 0x66, 0x0a, 0x03, 0xe7, 0xb8, 0x6d, 0x74, 0x4f, 0xdd,
+	0x3d, 0xb6, 0xf3, 0xab, 0x02, 0xec, 0xf0, 0x3c, 0x2d, 0x79, 0x5e, 0xf6, 0xb4, 0xc5, 0xac, 0x09,
+	0x26, 0x6e, 0x9d, 0xe8, 0x92, 0x39, 0x70, 0xb2, 0xdc, 0x68, 0x31, 0x89, 0x2d, 0x20, 0x7b, 0x57,
+	0xd8, 0xb3, 0xc8, 0xde, 0x8b, 0x3d, 0x7b, 0xfd, 0xcc, 0xbf, 0x47, 0x55, 0x76, 0xc7, 0xc0, 0x5a,
+	0x78, 0x49, 0x48, 0x7a, 0x6d, 0x97, 0x6a, 0xbd, 0x67, 0x25, 0x3c, 0x1f, 0x45, 0x61, 0xb9, 0x9a,
+	0xef, 0xb9, 0x44, 0xb2, 0x4b, 0xb0, 0x45, 0x96, 0xa8, 0x28, 0xc6, 0xcf, 0x43, 0xe7, 0x84, 0x3a,
+	0x9e, 0x08, 0x6d, 0x49, 0xe2, 0xb7, 0x0c, 0x13, 0x1f, 0x9d, 0xd3, 0xb6, 0xd1, 0xb5, 0xdc, 0x2d,
+	0x66, 0x6f, 0xa0, 0x49, 0xdb, 0xfb, 0x10, 0x86, 0x02, 0x43, 0x4f, 0xe9, 0x23, 0x6c, 0x1a, 0x70,
+	0xc0, 0x6b, 0xb3, 0x12, 0xc5, 0x32, 0xf2, 0xd1, 0x81, 0xdc, 0xec, 0x06, 0x76, 0x7e, 0x1a, 0xf0,
+	0xec, 0xc0, 0x1c, 0x7b, 0x4e, 0x2b, 0x10, 0x8a, 0xf6, 0x68, 0xb9, 0x39, 0xd0, 0x6a, 0x82, 0x4c,
+	0xe4, 0x27, 0x55, 0x72, 0x35, 0x05, 0xfe, 0xcf, 0x9d, 0xf8, 0x24, 0x78, 0x96, 0x62, 0x90, 0x8f,
+	0x2f, 0x6d, 0xed, 0x0a, 0x1a, 0xa4, 0x74, 0x12, 0xc5, 0x38, 0x9e, 0x47, 0x77, 0x8a, 0x6e, 0x85,
+	0xe9, 0xee, 0xb1, 0x9d, 0xef, 0x66, 0x91, 0xf7, 0xee, 0xac, 0x5d, 0x53, 0x46, 0xc9, 0x94, 0x8e,
+	0x83, 0x6e, 0x41, 0x1e, 0xb7, 0x55, 0x5c, 0x68, 0x81, 0x92, 0x67, 0xc2, 0xc7, 0x4d, 0xe0, 0x5b,
+	0xcc, 0xba, 0xd0, 0x1c, 0x4d, 0x26, 0xb7, 0x53, 0x2d, 0x2b, 0x93, 0x53, 0x9f, 0x07, 0x48, 0x52,
+	0xea, 0x6e, 0x43, 0xf3, 0x63, 0xa2, 0x07, 0x3c, 0xa0, 0xc9, 0x6a, 0x95, 0x62, 0x11, 0xb4, 0xae,
+	0xd9, 0x4b, 0x38, 0x19, 0xf6, 0xa7, 0x44, 0xe7, 0x11, 0x57, 0x87, 0xfd, 0x89, 0x7e, 0xc0, 0xc0,
+	0x9a, 0x47, 0x4a, 0x52, 0xac, 0x96, 0x4b, 0x35, 0x3b, 0x87, 0x2a, 0x0a, 0xc1, 0x85, 0xdc, 0xe4,
+	0xb9, 0x41, 0xa5, 0xdd, 0xda, 0x7b, 0xbb, 0xbd, 0x04, 0x9b, 0xdf, 0x8f, 0xb3, 0x38, 0xf6, 0xc4,
+	0x8a, 0xf2, 0xab, 0xb9, 0x4f, 0x84, 0xfe, 0xb2, 0x68, 0x46, 0xd1, 0x70, 0x46, 0x0d, 0x25, 0x8e,
+	0xb5, 0x00, 0xe4, 0x2a, 0x51, 0x73, 0x54, 0x91, 0x2f, 0x9d, 0x1a, 0x7d, 0x55, 0x3b, 0x8c, 0x9e,
+	0xa1, 0x78, 0xfa, 0x05, 0x97, 0xb8, 0x18, 0x69, 0xc5, 0x75, 0x52, 0x50, 0xe2, 0xfa, 0xcd, 0x87,
+	0x75, 0xcb, 0x78, 0x5c, 0xb7, 0x8c, 0x3f, 0xeb, 0x96, 0xf1, 0xe3, 0x6f, 0xeb, 0x68, 0x56, 0xa5,
+	0x3f, 0xcc, 0xfb, 0x7f, 0x01, 0x00, 0x00, 0xff, 0xff, 0xc2, 0xc0, 0xea, 0x92, 0xa3, 0x04, 0x00,
+	0x00,
 }

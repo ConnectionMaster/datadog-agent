@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build windows
 
@@ -61,6 +61,10 @@ func zipCounterStrings(tempDir, hostname string) error {
 			bufferSize += bufferIncrement
 			continue
 		}
+		// must set the length of the slice to the actual amount of data
+		// sz is in bytes, but it's a slice of uint16s, so divide the returned
+		// buffer size by two.
+		counterlist = counterlist[:(sz / 2)]
 		break
 	}
 	clist := winutil.ConvertWindowsStringList(counterlist)

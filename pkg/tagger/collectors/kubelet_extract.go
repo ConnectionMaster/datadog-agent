@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build kubelet
 
@@ -45,8 +45,8 @@ func (c *KubeletCollector) parsePods(pods []*kubelet.Pod) ([]*TagInfo, error) {
 		tags := utils.NewTagList()
 
 		// Pod name
-		tags.AddOrchestrator("pod_name", pod.Metadata.Name)
-		tags.AddLow("kube_namespace", pod.Metadata.Namespace)
+		tags.AddOrchestrator(kubernetes.PodTagName, pod.Metadata.Name)
+		tags.AddLow(kubernetes.NamespaceTagName, pod.Metadata.Namespace)
 
 		// Pod labels
 		for name, value := range pod.Metadata.Labels {
@@ -102,8 +102,8 @@ func (c *KubeletCollector) parsePods(pods []*kubelet.Pod) ([]*TagInfo, error) {
 
 		// Creator
 		for _, owner := range pod.Owners() {
-			tags.AddLow("kube_ownerref_kind", strings.ToLower(owner.Kind))
-			tags.AddOrchestrator("kube_ownerref_name", owner.Name)
+			tags.AddLow(kubernetes.OwnerRefKindTagName, strings.ToLower(owner.Kind))
+			tags.AddOrchestrator(kubernetes.OwnerRefNameTagName, owner.Name)
 
 			switch owner.Kind {
 			case "":
@@ -134,11 +134,9 @@ func (c *KubeletCollector) parsePods(pods []*kubelet.Pod) ([]*TagInfo, error) {
 			case kubernetes.ReplicaSetKind:
 				deployment := parseDeploymentForReplicaSet(owner.Name)
 				if len(deployment) > 0 {
-					tags.AddOrchestrator(kubernetes.ReplicaSetTagName, owner.Name)
 					tags.AddLow(kubernetes.DeploymentTagName, deployment)
-				} else {
-					tags.AddLow(kubernetes.ReplicaSetTagName, owner.Name)
 				}
+				tags.AddLow(kubernetes.ReplicaSetTagName, owner.Name)
 			default:
 				log.Debugf("unknown owner kind %s for pod %s", owner.Kind, pod.Metadata.Name)
 			}

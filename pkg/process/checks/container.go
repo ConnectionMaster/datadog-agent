@@ -1,7 +1,6 @@
 package checks
 
 import (
-	"runtime"
 	"sync"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	containercollectors "github.com/DataDog/datadog-agent/pkg/util/containers/collectors"
 	"github.com/DataDog/datadog-agent/pkg/util/containers/metrics"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
+	"github.com/DataDog/datadog-agent/pkg/util/system"
 )
 
 // Container is a singleton ContainerCheck.
@@ -48,7 +48,7 @@ func (c *ContainerCheck) Init(cfg *config.AgentConfig, info *model.SystemInfo) {
 }
 
 // Name returns the name of the ProcessCheck.
-func (c *ContainerCheck) Name() string { return "container" }
+func (c *ContainerCheck) Name() string { return config.ContainerCheckName }
 
 // RealTime indicates if this check only runs in real-time mode.
 func (c *ContainerCheck) RealTime() bool { return false }
@@ -133,7 +133,7 @@ func fmtContainers(ctrList []*containers.Container, lastRates map[string]util.Co
 		lastCtr = fillNilRates(lastCtr)
 
 		ifStats := ctr.Network.SumInterfaces()
-		cpus := runtime.NumCPU()
+		cpus := system.HostCPUCount()
 		sys2, sys1 := ctr.CPU.SystemUsage, lastCtr.CPU.SystemUsage
 
 		// Retrieves metadata tags

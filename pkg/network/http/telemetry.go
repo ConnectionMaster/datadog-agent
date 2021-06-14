@@ -3,54 +3,72 @@
 package http
 
 import (
+	"sync/atomic"
 	"time"
+
+	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
 type telemetry struct {
-	then   time.Time
-	hits   map[int]int
-	misses int
+	then    int64
+	elapsed int64
+
+	hits         [5]int64
+	misses       int64 // this happens when we can't cope with the rate of events
+	dropped      int64 // this happens when httpStatKeeper reaches capacity
+	aggregations int64
 }
 
 func newTelemetry() *telemetry {
-	t := new(telemetry)
-	t.reset()
-	return t
+	return &telemetry{
+		then: time.Now().Unix(),
+	}
 }
 
 func (t *telemetry) aggregate(txs []httpTX, err error) {
 	for _, tx := range txs {
-		t.hits[tx.StatusClass()]++
+		if i := tx.StatusClass()/100 - 1; i >= 0 && i < len(t.hits) {
+			atomic.AddInt64(&t.hits[i], 1)
+		}
 	}
 
 	if err == errLostBatch {
-		t.misses++
+		atomic.AddInt64(&t.misses, int64(HTTPBatchSize))
 	}
 }
 
-func (t *telemetry) getStats() (time.Time, map[string]int64) {
+func (t *telemetry) reset() telemetry {
 	now := time.Now()
-	delta := float64(now.Sub(t.then).Seconds())
-	data := map[string]int64{
-		"1XX_request_count":     int64(t.hits[100]),
-		"2XX_request_count":     int64(t.hits[200]),
-		"3XX_request_count":     int64(t.hits[300]),
-		"4XX_request_count":     int64(t.hits[400]),
-		"5XX_request_count":     int64(t.hits[500]),
-		"1XX_request_rate":      int64(float64(t.hits[100]) / delta),
-		"2XX_request_rate":      int64(float64(t.hits[200]) / delta),
-		"3XX_request_rate":      int64(float64(t.hits[300]) / delta),
-		"4XX_request_rate":      int64(float64(t.hits[400]) / delta),
-		"5XX_request_rate":      int64(float64(t.hits[500]) / delta),
-		"requests_missed_count": int64(t.misses * HTTPBatchSize),
-		"requests_missed_rate":  int64(float64(t.misses*HTTPBatchSize) / delta),
+	then := atomic.SwapInt64(&t.then, now.Unix())
+
+	delta := telemetry{
+		misses:       atomic.SwapInt64(&t.misses, 0),
+		dropped:      atomic.SwapInt64(&t.dropped, 0),
+		aggregations: atomic.SwapInt64(&t.aggregations, 0),
+		elapsed:      now.Unix() - then,
 	}
-	t.reset()
-	return now, data
+
+	for i := range t.hits {
+		delta.hits[i] = atomic.SwapInt64(&t.hits[i], 0)
+	}
+
+	return delta
 }
 
-func (t *telemetry) reset() {
-	t.then = time.Now()
-	t.hits = make(map[int]int)
-	t.misses = 0
+func (t *telemetry) report() {
+	var totalRequests int64
+	for _, n := range t.hits {
+		totalRequests += n
+	}
+
+	log.Debugf(
+		"http stats summary: requests_processed=%d(%.2f/s) requests_missed=%d(%.2f/s) requests_dropped=%d(%.2f/s) aggregations=%d",
+		totalRequests,
+		float64(totalRequests)/float64(t.elapsed),
+		t.misses,
+		float64(t.misses)/float64(t.elapsed),
+		t.dropped,
+		float64(t.dropped)/float64(t.elapsed),
+		t.aggregations,
+	)
 }

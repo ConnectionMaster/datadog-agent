@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package autodiscovery
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/listeners"
+	"github.com/DataDog/datadog-agent/pkg/autodiscovery/providers"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/providers/names"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/scheduler"
 	"github.com/DataDog/datadog-agent/pkg/config"
@@ -40,6 +41,10 @@ func (p *MockProvider) String() string {
 
 func (p *MockProvider) IsUpToDate() (bool, error) {
 	return true, nil
+}
+
+func (p *MockProvider) GetConfigErrors() map[string]providers.ErrorMsgSet {
+	return make(map[string]providers.ErrorMsgSet)
 }
 
 type MockProvider2 struct {

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build kubelet,orchestrator
 
@@ -37,7 +37,7 @@ func (c *PodCheck) Init(cfg *config.AgentConfig, info *model.SystemInfo) {
 }
 
 // Name returns the name of the ProcessCheck.
-func (c *PodCheck) Name() string { return "pod" }
+func (c *PodCheck) Name() string { return config.PodCheckName }
 
 // RealTime indicates if this check only runs in real-time mode.
 func (c *PodCheck) RealTime() bool { return false }

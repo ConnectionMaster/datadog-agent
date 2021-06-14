@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build clusterchecks
 // +build kubeapiserver
@@ -38,6 +38,7 @@ type KubeServiceConfigProvider struct {
 // NewKubeServiceConfigProvider returns a new ConfigProvider connected to apiserver.
 // Connectivity is not checked at this stage to allow for retries, Collect will do it.
 func NewKubeServiceConfigProvider(config config.ConfigurationProviders) (ConfigProvider, error) {
+	// Using GetAPIClient() (no retry)
 	ac, err := apiserver.GetAPIClient()
 	if err != nil {
 		return nil, fmt.Errorf("cannot connect to apiserver: %s", err)
@@ -169,4 +170,9 @@ func parseServiceAnnotations(services []*v1.Service) ([]integration.Config, erro
 
 func init() {
 	RegisterProvider("kube_services", NewKubeServiceConfigProvider)
+}
+
+// GetConfigErrors is not implemented for the KubeServiceConfigProvider
+func (k *KubeServiceConfigProvider) GetConfigErrors() map[string]ErrorMsgSet {
+	return make(map[string]ErrorMsgSet)
 }

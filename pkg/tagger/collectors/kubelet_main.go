@@ -1,17 +1,18 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build kubelet
 
 package collectors
 
 import (
+	"errors"
 	"time"
 
 	"github.com/DataDog/datadog-agent/pkg/config"
-	"github.com/DataDog/datadog-agent/pkg/errors"
+	agenterr "github.com/DataDog/datadog-agent/pkg/errors"
 	"github.com/DataDog/datadog-agent/pkg/tagger/utils"
 	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/kubelet"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
@@ -40,6 +41,10 @@ type KubeletCollector struct {
 
 // Detect tries to connect to the kubelet
 func (c *KubeletCollector) Detect(out chan<- []*TagInfo) (CollectionMode, error) {
+	if !config.IsKubernetes() {
+		return NoCollection, errors.New("the Agent is not running in Kubernetes")
+	}
+
 	watcher, err := kubelet.NewPodWatcher(5*time.Minute, true)
 	if err != nil {
 		return NoCollection, err
@@ -119,7 +124,7 @@ func (c *KubeletCollector) Fetch(entity string) ([]string, []string, []string, e
 		}
 	}
 	// entity not found in updates
-	return []string{}, []string{}, []string{}, errors.NewNotFound(entity)
+	return []string{}, []string{}, []string{}, agenterr.NewNotFound(entity)
 }
 
 // parseExpires transforms event from the PodWatcher to TagInfo objects

@@ -17,12 +17,13 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/process/heartbeat"
 	"github.com/DataDog/datadog-agent/pkg/process/statsd"
 	"github.com/DataDog/datadog-agent/pkg/process/util"
-	"github.com/DataDog/datadog-agent/pkg/process/util/api"
+	apicfg "github.com/DataDog/datadog-agent/pkg/process/util/api/config"
 	"github.com/DataDog/datadog-agent/pkg/tagger"
 	"github.com/DataDog/datadog-agent/pkg/tagger/collectors"
 	"github.com/DataDog/datadog-agent/pkg/tagger/local"
 	"github.com/DataDog/datadog-agent/pkg/tagger/remote"
 	"github.com/DataDog/datadog-agent/pkg/telemetry"
+	ddutil "github.com/DataDog/datadog-agent/pkg/util"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 	"github.com/DataDog/datadog-agent/pkg/util/profiling"
 	"github.com/DataDog/datadog-agent/pkg/version"
@@ -87,6 +88,10 @@ func runAgent(exit chan struct{}) {
 		cleanupAndExit(0)
 	}
 
+	if err := ddutil.SetupCoreDump(); err != nil {
+		log.Warnf("Can't setup core dumps: %v, core dumps might not be available after a crash", err)
+	}
+
 	if opts.check == "" && !opts.info && opts.pidfilePath != "" {
 		err := pidfile.WritePID(opts.pidfilePath)
 		if err != nil {
@@ -128,14 +133,14 @@ func runAgent(exit chan struct{}) {
 		log.Criticalf("Error initializing info: %s", err)
 		cleanupAndExit(1)
 	}
-	if err := statsd.Configure(cfg); err != nil {
+	if err := statsd.Configure(cfg.StatsdHost, cfg.StatsdPort); err != nil {
 		log.Criticalf("Error configuring statsd: %s", err)
 		cleanupAndExit(1)
 	}
 
 	// Initialize system-probe heartbeats
 	sysprobeMonitor, err := heartbeat.NewModuleMonitor(heartbeat.Options{
-		KeysPerDomain:      api.KeysPerDomains(cfg.APIEndpoints),
+		KeysPerDomain:      apicfg.KeysPerDomains(cfg.APIEndpoints),
 		SysprobeSocketPath: cfg.SystemProbeAddress,
 		HostName:           cfg.HostName,
 		TagVersion:         Version,
@@ -233,8 +238,9 @@ func debugCheckResults(cfg *config.AgentConfig, check string) error {
 		return err
 	}
 
-	if check == checks.Connections.Name() {
-		// Connections check requires process-check to have occurred first (for process creation ts)
+	// Connections check requires process-check to have occurred first (for process creation ts),
+	// RTProcess check requires process check to gather PIDs first
+	if check == checks.Connections.Name() || check == checks.RTProcess.Name() {
 		checks.Process.Init(cfg, sysInfo)
 		checks.Process.Run(cfg, 0) //nolint:errcheck
 	}
@@ -304,5 +310,5 @@ func enableProfiling(cfg *config.AgentConfig) error {
 
 	v, _ := version.Agent()
 
-	return profiling.Start(cfg.ProfilingAPIKey, site, cfg.ProfilingEnvironment, "process-agent", fmt.Sprintf("version:%v", v))
+	return profiling.Start(cfg.ProfilingAPIKey, site, cfg.ProfilingEnvironment, "process-agent", cfg.ProfilingPeriod, cfg.ProfilingCPUDuration, fmt.Sprintf("version:%v", v))
 }

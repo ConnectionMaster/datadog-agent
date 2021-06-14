@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package flare
 
@@ -14,7 +14,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mholt/archiver"
+	"github.com/mholt/archiver/v3"
 
 	apiv1 "github.com/DataDog/datadog-agent/pkg/clusteragent/api/v1"
 	"github.com/DataDog/datadog-agent/pkg/clusteragent/custommetrics"
@@ -124,7 +124,8 @@ func createDCAArchive(zipFilePath string, local bool, confSearchPaths SearchPath
 		log.Infof("Error while creating permissions.log infos file: %s", err)
 	}
 
-	err = archiver.Zip.Make(zipFilePath, []string{filepath.Join(tempDir, hostname)})
+	// File format is determined based on `zipFilePath` extension
+	err = archiver.Archive([]string{filepath.Join(tempDir, hostname)}, zipFilePath)
 	if err != nil {
 		return "", err
 	}

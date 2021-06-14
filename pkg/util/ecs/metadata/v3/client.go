@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2020 Datadog, Inc.
+// Copyright 2020-present Datadog, Inc.
 
 // +build docker
 
@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	// Default environment variable used to hold the metadata endpoint URI.
+	// DefaultMetadataURIEnvVariable is the default environment variable used to hold the metadata endpoint URI.
 	DefaultMetadataURIEnvVariable = "ECS_CONTAINER_METADATA_URI"
 
 	// Metadata v3 API paths

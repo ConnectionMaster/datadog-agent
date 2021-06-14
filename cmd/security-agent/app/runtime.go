@@ -3,7 +3,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package app
 
@@ -24,8 +24,11 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/logs/restart"
 	secagent "github.com/DataDog/datadog-agent/pkg/security/agent"
 	secconfig "github.com/DataDog/datadog-agent/pkg/security/config"
+	securityLogger "github.com/DataDog/datadog-agent/pkg/security/log"
+	"github.com/DataDog/datadog-agent/pkg/security/model"
 	sprobe "github.com/DataDog/datadog-agent/pkg/security/probe"
 	"github.com/DataDog/datadog-agent/pkg/security/rules"
+	"github.com/DataDog/datadog-agent/pkg/security/secl/eval"
 	"github.com/DataDog/datadog-agent/pkg/status/health"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 	ddgostatsd "github.com/DataDog/datadog-go/statsd"
@@ -93,19 +96,25 @@ func checkPolicies(cmd *cobra.Command, args []string) error {
 		PIDCacheSize:        1,
 	}
 
-	probe, err := sprobe.NewProbe(cfg, nil)
-	if err != nil {
+	// enabled all the rules
+	enabled := map[eval.EventType]bool{"*": true}
+
+	opts := rules.NewOptsWithParams(model.SECLConstants, sprobe.SupportedDiscarders, enabled, sprobe.AllCustomRuleIDs(), model.SECLLegacyAttributes, securityLogger.DatadogAgentLogger{})
+	model := &model.Model{}
+	ruleSet := rules.NewRuleSet(model, model.NewEvent, opts)
+
+	if err := rules.LoadPolicies(cfg.PoliciesDir, ruleSet); err.ErrorOrNil() != nil {
 		return err
 	}
 
-	ruleSet := probe.NewRuleSet(rules.NewOptsWithParams(sprobe.SECLConstants, sprobe.SupportedDiscarders))
-	if err := rules.LoadPolicies(cfg, ruleSet); err != nil {
+	approvers, err := ruleSet.GetApprovers(sprobe.GetCapababilities())
+	if err != nil {
 		return err
 	}
 
 	rsa := sprobe.NewRuleSetApplier(cfg, nil)
 
-	report, err := rsa.Apply(ruleSet)
+	report, err := rsa.Apply(ruleSet, approvers)
 	if err != nil {
 		return err
 	}
@@ -140,6 +149,12 @@ func newRuntimeReporter(stopper restart.Stopper, sourceName, sourceType string, 
 	return event.NewReporter(logSource, pipelineProvider.NextPipelineChan()), nil
 }
 
+// This function will only be used on Linux. The only platforms where the runtime agent runs
+func newLogContextRuntime() (*config.Endpoints, *client.DestinationsContext, error) { // nolint: deadcode, unused
+	logsConfigComplianceKeys := config.NewLogsConfigKeys("runtime_security_config.endpoints.", coreconfig.Datadog)
+	return newLogContext(logsConfigComplianceKeys, "runtime-security-http-intake.logs.")
+}
+
 func startRuntimeSecurity(hostname string, stopper restart.Stopper, statsdClient *ddgostatsd.Client) (*secagent.RuntimeSecurityAgent, error) {
 	enabled := coreconfig.Datadog.GetBool("runtime_security_config.enabled")
 	if !enabled {
@@ -167,10 +182,6 @@ func startRuntimeSecurity(hostname string, stopper restart.Stopper, statsdClient
 	stopper.Add(agent)
 
 	log.Info("Datadog runtime security agent is now running")
-
-	// Send the runtime 'running' metrics periodically
-	ticker := sendRunningMetrics(statsdClient, "runtime")
-	stopper.Add(ticker)
 
 	return agent, nil
 }

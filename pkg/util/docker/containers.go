@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build docker
 
@@ -35,7 +35,7 @@ type ContainerListConfig struct {
 	FlagExcluded  bool
 }
 
-// Containers gets a list of all containers on the current node using a mix of
+// ListContainers gets a list of all containers on the current node using a mix of
 // the Docker APIs and cgroups stats. We attempt to limit syscalls where possible.
 func (d *DockerUtil) ListContainers(cfg *ContainerListConfig) ([]*containers.Container, error) {
 	err := providers.ContainerImpl().Prefetch()

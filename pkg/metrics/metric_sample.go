@@ -1,12 +1,12 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package metrics
 
 import (
-	"github.com/DataDog/datadog-agent/pkg/dogstatsd/listeners"
+	"github.com/DataDog/datadog-agent/pkg/dogstatsd/packets"
 	"github.com/DataDog/datadog-agent/pkg/tagger"
 	"github.com/DataDog/datadog-agent/pkg/tagger/collectors"
 	"github.com/DataDog/datadog-agent/pkg/telemetry"
@@ -27,7 +27,6 @@ const (
 	HistogramType
 	HistorateType
 	SetType
-	// NOTE: DistributionType is in development and is NOT supported
 	DistributionType
 )
 
@@ -75,7 +74,7 @@ func (m MetricType) String() string {
 type MetricSampleContext interface {
 	GetName() string
 	GetHost() string
-	GetTags(tagsBuffer []string) []string
+	GetTags(*util.TagsBuilder)
 }
 
 // MetricSample represents a raw metric sample
@@ -91,6 +90,7 @@ type MetricSample struct {
 	FlushFirstValue bool
 	OriginID        string
 	K8sOriginID     string
+	Cardinality     string
 }
 
 // Implement the MetricSampleContext interface
@@ -105,50 +105,44 @@ func (m *MetricSample) GetHost() string {
 	return m.Host
 }
 
-func findOriginTags(origin string, tags []string) []string {
-	if origin != listeners.NoOrigin {
-		originTags, err := tagger.Tag(origin, tagger.DogstatsdCardinality)
-		if err != nil {
+func findOriginTags(origin string, cardinality collectors.TagCardinality, tb *util.TagsBuilder) {
+	if origin != packets.NoOrigin {
+		if err := tagger.TagBuilder(origin, cardinality, tb); err != nil {
 			log.Errorf(err.Error())
-		} else {
-			tags = append(tags, originTags...)
 		}
 	}
+}
 
+func addOrchestratorTags(cardinality collectors.TagCardinality, tb *util.TagsBuilder) {
 	// Include orchestrator scope tags if the cardinality is set to orchestrator
-	if tagger.DogstatsdCardinality == collectors.OrchestratorCardinality {
-		orchestratorScopeTags, err := tagger.OrchestratorScopeTag()
-		if err != nil {
+	if cardinality == collectors.OrchestratorCardinality {
+		if err := tagger.OrchestratorScopeTagBuilder(tb); err != nil {
 			log.Error(err.Error())
-		} else {
-			tags = append(tags, orchestratorScopeTags...)
 		}
 	}
-	return tags
 }
 
 // EnrichTags expend a tag list with origin detection tags
-func EnrichTags(tagsBuffer []string, originID string, k8sOriginID string) []string {
-	if originID != "" {
-		tagsBuffer = findOriginTags(originID, tagsBuffer)
-	}
+func EnrichTags(tb *util.TagsBuilder, originID string, k8sOriginID string, cardinality string) {
+	taggerCard := taggerCardinality(cardinality)
+
+	findOriginTags(originID, taggerCard, tb)
+	addOrchestratorTags(taggerCard, tb)
 
 	if k8sOriginID != "" {
-		if entityTags, err := tagger.Tag(k8sOriginID, tagger.DogstatsdCardinality); err == nil {
-			tagsBuffer = append(tagsBuffer, entityTags...)
-		} else {
+		if err := tagger.TagBuilder(k8sOriginID, taggerCard, tb); err != nil {
 			tlmUDPOriginDetectionError.Inc()
 			log.Tracef("Cannot get tags for entity %s: %s", k8sOriginID, err)
 		}
 	}
 
-	return util.SortUniqInPlace(tagsBuffer)
+	tb.SortUniq()
 }
 
 // GetTags returns the metric sample tags
-func (m *MetricSample) GetTags(tagsBuffer []string) []string {
-	tagsBuffer = append(tagsBuffer, m.Tags...)
-	return EnrichTags(tagsBuffer, m.OriginID, m.K8sOriginID)
+func (m *MetricSample) GetTags(tb *util.TagsBuilder) {
+	tb.Append(m.Tags...)
+	EnrichTags(tb, m.OriginID, m.K8sOriginID, m.Cardinality)
 }
 
 // Copy returns a deep copy of the m MetricSample
@@ -158,4 +152,20 @@ func (m *MetricSample) Copy() *MetricSample {
 	dst.Tags = make([]string, len(m.Tags))
 	copy(dst.Tags, m.Tags)
 	return dst
+}
+
+// taggerCardinality converts tagger cardinality string to collectors.TagCardinality
+// It defaults to DogstatsdCardinality if the string is empty or unknown
+func taggerCardinality(cardinality string) collectors.TagCardinality {
+	if cardinality == "" {
+		return tagger.DogstatsdCardinality
+	}
+
+	taggerCardinality, err := collectors.StringToTagCardinality(cardinality)
+	if err != nil {
+		log.Tracef("Couldn't convert cardinality tag: %w", err)
+		return tagger.DogstatsdCardinality
+	}
+
+	return taggerCardinality
 }

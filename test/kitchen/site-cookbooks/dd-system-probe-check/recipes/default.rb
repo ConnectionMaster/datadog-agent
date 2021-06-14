@@ -2,10 +2,15 @@
 # Cookbook Name:: dd-system-probe-check
 # Recipe:: default
 #
-# Copyright (C) 2020 Datadog
+# Copyright (C) 2020-present Datadog
 #
 if platform?('centos')
-  include_recipe 'yum-centos::vault'
+  include_recipe '::old_vault'
+end
+
+case node[:platform]
+  when 'ubuntu', 'debian'
+    apt_update
 end
 
 kernel_version = `uname -r`.strip
@@ -16,6 +21,13 @@ package 'kernel headers' do
   when 'ubuntu', 'debian'
     package_name "linux-headers-#{kernel_version}"
   end
+end
+
+package 'python3'
+
+case node[:platform]
+  when 'centos', 'redhat'
+    package 'iptables'
 end
 
 package 'conntrack'
@@ -50,4 +62,22 @@ execute 'chmod test files' do
   command "chmod -R 755 /tmp/system-probe-tests"
   user "root"
   action :run
+end
+
+execute 'ensure conntrack is enabled' do
+  command "iptables -I INPUT 1 -m conntrack --ctstate NEW,RELATED,ESTABLISHED -j ACCEPT"
+  user "root"
+  action :run
+end
+
+execute 'disable firewalld on redhat' do
+  command "systemctl disable --now firewalld"
+  user "root"
+  ignore_failure true
+  case node[:platform]
+  when 'redhat'
+    action :run
+  else
+    action :nothing
+  end
 end

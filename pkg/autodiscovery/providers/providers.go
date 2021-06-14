@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package providers
 
@@ -30,6 +30,9 @@ type ProviderCache struct {
 	NumAdTemplates    int
 }
 
+// ErrorMsgSet contains a unique list of configuration errors for a provider
+type ErrorMsgSet map[string]struct{}
+
 // NewCPCache instantiate a ProviderCache.
 func NewCPCache() *ProviderCache {
 	return &ProviderCache{
@@ -51,4 +54,5 @@ type ConfigProvider interface {
 	Collect() ([]integration.Config, error)
 	String() string
 	IsUpToDate() (bool, error)
+	GetConfigErrors() map[string]ErrorMsgSet
 }

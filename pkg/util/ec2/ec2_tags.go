@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build ec2
 
@@ -34,6 +34,18 @@ func fetchEc2Tags() ([]string, error) {
 		return nil, err
 	}
 
+	// First, try automatic credentials detection. This works in most scenarios,
+	// except when a more specific role (e.g. task role in ECS) does not have
+	// EC2:DescribeTags permission, but a more general role (e.g. instance role)
+	// does have it.
+	tags, err := getTagsWithCreds(instanceIdentity, nil)
+	if err == nil {
+		return tags, nil
+	}
+	log.Warnf("unable to get tags using default credentials (falling back to instance role): %s", err)
+
+	// If the above fails, for backward compatibility, fall back to our legacy
+	// behavior, where we explicitly query instance role to get credentials.
 	iamParams, err := getSecurityCreds()
 	if err != nil {
 		return nil, err
@@ -43,6 +55,10 @@ func fetchEc2Tags() ([]string, error) {
 		iamParams.SecretAccessKey,
 		iamParams.Token)
 
+	return getTagsWithCreds(instanceIdentity, awsCreds)
+}
+
+func getTagsWithCreds(instanceIdentity *ec2Identity, awsCreds *credentials.Credentials) ([]string, error) {
 	awsSess, err := session.NewSession(&aws.Config{
 		Region:      aws.String(instanceIdentity.Region),
 		Credentials: awsCreds,
@@ -75,8 +91,7 @@ func fetchEc2Tags() ([]string, error) {
 // for testing purposes
 var fetchTags = fetchEc2Tags
 
-// GetTags grabs the host tags from the EC2 api
-func GetTags() ([]string, error) {
+func fetchTagsFromCache() ([]string, error) {
 	if !config.IsCloudProviderEnabled(CloudProviderName) {
 		return nil, fmt.Errorf("cloud provider is disabled by configuration")
 	}
@@ -87,13 +102,22 @@ func GetTags() ([]string, error) {
 			log.Infof("unable to get tags from aws, returning cached tags: %s", err)
 			return ec2Tags.([]string), nil
 		}
-		return nil, log.Warnf("unable to get tags from aws and cache is empty: %s", err)
+		return nil, fmt.Errorf("unable to get tags from aws and cache is empty: %s", err)
 	}
 
 	// save tags to the cache in case we exceed quotas later
 	cache.Cache.Set(tagsCacheKey, tags, cache.NoExpiration)
 
 	return tags, nil
+}
+
+// GetTags grabs the host tags from the EC2 api
+func GetTags() ([]string, error) {
+	tags, err := fetchTagsFromCache()
+	if err != nil {
+		log.Warn(err.Error())
+	}
+	return tags, err
 }
 
 type ec2Identity struct {

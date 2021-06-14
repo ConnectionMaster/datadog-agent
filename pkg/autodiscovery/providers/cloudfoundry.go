@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 //
 // +build clusterchecks
 
@@ -213,4 +213,9 @@ func (cf CloudFoundryConfigProvider) renderExtractedConfigs(configs []integratio
 
 func init() {
 	RegisterProvider(names.CloudFoundryBBS, NewCloudFoundryConfigProvider)
+}
+
+// GetConfigErrors is not implemented for the CloudFoundryConfigProvider
+func (cf CloudFoundryConfigProvider) GetConfigErrors() map[string]ErrorMsgSet {
+	return make(map[string]ErrorMsgSet)
 }

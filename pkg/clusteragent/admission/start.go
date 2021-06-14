@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build kubeapiserver
 
@@ -17,6 +17,7 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver/common"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -28,6 +29,7 @@ type ControllerContext struct {
 	SecretInformers  informers.SharedInformerFactory
 	WebhookInformers informers.SharedInformerFactory
 	Client           kubernetes.Interface
+	DiscoveryClient  discovery.DiscoveryInterface
 	StopCh           chan struct{}
 }
 
@@ -52,13 +54,17 @@ func StartControllers(ctx ControllerContext) error {
 		ctx.IsLeaderFunc,
 		secretConfig,
 	)
-	go secretController.Run(ctx.StopCh)
+
+	webhooks, err := generateWebhooks(ctx.DiscoveryClient)
+	if err != nil {
+		return err
+	}
 
 	webhookConfig := webhook.NewConfig(
 		config.Datadog.GetString("admission_controller.webhook_name"),
 		config.Datadog.GetString("admission_controller.certificate.secret_name"),
 		common.GetResourcesNamespace(),
-		generateWebhooks())
+		webhooks)
 	webhookController := webhook.NewController(
 		ctx.Client,
 		ctx.SecretInformers.Core().V1().Secrets(),
@@ -66,6 +72,8 @@ func StartControllers(ctx ControllerContext) error {
 		ctx.IsLeaderFunc,
 		webhookConfig,
 	)
+
+	go secretController.Run(ctx.StopCh)
 	go webhookController.Run(ctx.StopCh)
 
 	ctx.SecretInformers.Start(ctx.StopCh)

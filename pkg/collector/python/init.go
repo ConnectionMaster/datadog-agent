@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build python
 
@@ -111,13 +111,15 @@ void initDatadogAgentModule(rtloader_t *rtloader) {
 void SubmitMetric(char *, metric_type_t, char *, double, char **, char *, bool);
 void SubmitServiceCheck(char *, char *, int, char **, char *, char *);
 void SubmitEvent(char *, event_t *);
-void SubmitHistogramBucket(char *, char *, long long, float, float, int, char *, char **);
+void SubmitHistogramBucket(char *, char *, long long, float, float, int, char *, char **, bool);
+void SubmitEventPlatformEvent(char *, char *, char *);
 
 void initAggregatorModule(rtloader_t *rtloader) {
 	set_submit_metric_cb(rtloader, SubmitMetric);
 	set_submit_service_check_cb(rtloader, SubmitServiceCheck);
 	set_submit_event_cb(rtloader, SubmitEvent);
 	set_submit_histogram_bucket_cb(rtloader, SubmitHistogramBucket);
+	set_submit_event_platform_event_cb(rtloader, SubmitEventPlatformEvent);
 }
 
 //
@@ -183,9 +185,10 @@ var (
 
 	rtloader *C.rtloader_t = nil
 
-	expvarPyInit *expvar.Map
-	pyInitLock   sync.RWMutex
-	pyInitErrors []string
+	expvarPyInit  *expvar.Map
+	pyInitLock    sync.RWMutex
+	pyDestroyLock sync.RWMutex
+	pyInitErrors  []string
 )
 
 func init() {
@@ -348,7 +351,11 @@ func Initialize(paths ...string) error {
 	}
 
 	// Lock the GIL
-	glock := newStickyLock()
+	glock, err := newStickyLock()
+	if err != nil {
+		return err
+	}
+
 	pyInfo := C.get_py_info(rtloader)
 	glock.unlock()
 
@@ -372,9 +379,21 @@ func Initialize(paths ...string) error {
 
 // Destroy destroys the loaded Python interpreter initialized by 'Initialize'
 func Destroy() {
-	if rtloader != nil {
-		C.destroy(rtloader)
+	pyDestroyLock.Lock()
+	defer pyDestroyLock.Unlock()
+
+	// Sanity check - this should ideally never happen
+	if rtloader == nil {
+		log.Warn("Python runtime already destroyed. Ignoring action.")
+		return
 	}
+
+	// Clear the C-side and Go-side rtloader pointers
+	log.Info("Destroying Python runtime")
+	C.destroy(rtloader)
+	rtloader = nil
+
+	log.Info("Python runtime destroyed")
 }
 
 // GetRtLoader returns the underlying rtloader_t struct. This is meant for testing and

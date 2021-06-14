@@ -1,7 +1,9 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
+
+// +build test
 
 package forwarder
 
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DataDog/datadog-agent/pkg/forwarder/transaction"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -50,8 +53,8 @@ func (t *testTransaction) GetTarget() string {
 	return t.Called().Get(0).(string)
 }
 
-func (t *testTransaction) GetPriority() TransactionPriority {
-	return TransactionPriorityNormal
+func (t *testTransaction) GetPriority() transaction.Priority {
+	return transaction.TransactionPriorityNormal
 }
 
 func (t *testTransaction) GetEndpointName() string {
@@ -62,7 +65,7 @@ func (t *testTransaction) GetPayloadSize() int {
 	return t.Called().Get(0).(int)
 }
 
-func (t *testTransaction) SerializeTo(serializer *TransactionsSerializer) error {
+func (t *testTransaction) SerializeTo(serializer transaction.TransactionsSerializer) error {
 	return nil
 }
 

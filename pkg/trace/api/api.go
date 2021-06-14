@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package api
 
@@ -105,23 +105,24 @@ func NewHTTPReceiver(conf *config.AgentConfig, dynConf *sampler.DynamicConfig, o
 func (r *HTTPReceiver) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
+	hash, infoHandler := r.makeInfoHandler()
 	r.attachDebugHandlers(mux)
-
-	mux.HandleFunc("/spans", r.handleWithVersion(v01, r.handleTraces))
-	mux.HandleFunc("/services", r.handleWithVersion(v01, r.handleServices))
-	mux.HandleFunc("/v0.1/spans", r.handleWithVersion(v01, r.handleTraces))
-	mux.HandleFunc("/v0.1/services", r.handleWithVersion(v01, r.handleServices))
-	mux.HandleFunc("/v0.2/traces", r.handleWithVersion(v02, r.handleTraces))
-	mux.HandleFunc("/v0.2/services", r.handleWithVersion(v02, r.handleServices))
-	mux.HandleFunc("/v0.3/traces", r.handleWithVersion(v03, r.handleTraces))
-	mux.HandleFunc("/v0.3/services", r.handleWithVersion(v03, r.handleServices))
-	mux.HandleFunc("/v0.4/traces", r.handleWithVersion(v04, r.handleTraces))
-	mux.HandleFunc("/v0.4/services", r.handleWithVersion(v04, r.handleServices))
-	mux.HandleFunc("/v0.5/traces", r.handleWithVersion(v05, r.handleTraces))
-	mux.HandleFunc("/v0.5/stats", r.handleStats)
-	mux.Handle("/profiling/v1/input", r.profileProxyHandler())
+	for _, e := range endpoints {
+		mux.Handle(e.Pattern, replyWithVersion(hash, e.Handler(r)))
+	}
+	mux.HandleFunc("/info", infoHandler)
 
 	return mux
+}
+
+// replyWithVersion returns an http.Handler which calls h with an addition of some
+// HTTP headers containing version and state information.
+func replyWithVersion(hash string, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Datadog-Agent-Version", info.Version)
+		w.Header().Set("Datadog-Agent-State", hash)
+		h.ServeHTTP(w, r)
+	})
 }
 
 // Start starts doing the HTTP server and is ready to receive traces
@@ -349,6 +350,14 @@ const (
 	// headerComputedStats specifies whether the client has computed stats so that the agent
 	// doesn't have to.
 	headerComputedStats = "Datadog-Client-Computed-Stats"
+
+	// headderDroppedP0Traces contains the number of P0 trace chunks dropped by the client.
+	// This value is used to adjust priority rates computed by the agent.
+	headerDroppedP0Traces = "Datadog-Client-Dropped-P0-Traces"
+
+	// headderDroppedP0Spans contains the number of P0 spans dropped by the client.
+	// This value is used for metrics and could be used in the future to adjust priority rates.
+	headerDroppedP0Spans = "Datadog-Client-Dropped-P0-Spans"
 )
 
 func (r *HTTPReceiver) tagStats(v Version, req *http.Request) *info.TagStats {
@@ -413,19 +422,19 @@ func (r *HTTPReceiver) rateLimited(n int64) bool {
 type StatsProcessor interface {
 	// ProcessStats takes a stats payload and consumes it. It is considered to be originating
 	// from the given lang.
-	ProcessStats(p pb.ClientStatsPayload, lang string)
+	ProcessStats(p pb.ClientStatsPayload, lang, tracerVersion string)
 }
 
 // handleStats handles incoming stats payloads.
 func (r *HTTPReceiver) handleStats(w http.ResponseWriter, req *http.Request) {
 	defer timing.Since("datadog.trace_agent.receiver.stats_process_ms", time.Now())
 
-	ts := r.tagStats(v05, req)
+	ts := r.tagStats(v06, req)
 	rd := NewLimitedReader(req.Body, r.conf.MaxRequestBytes)
 	req.Header.Set("Accept", "application/msgpack")
 	var in pb.ClientStatsPayload
 	if err := msgp.Decode(rd, &in); err != nil {
-		httpDecodingError(err, []string{"handler:stats", "codec:msgpack", "v:v0.5"}, w)
+		httpDecodingError(err, []string{"handler:stats", "codec:msgpack", "v:v0.6"}, w)
 		return
 	}
 
@@ -433,7 +442,7 @@ func (r *HTTPReceiver) handleStats(w http.ResponseWriter, req *http.Request) {
 	metrics.Count("datadog.trace_agent.receiver.stats_bytes", rd.Count, ts.AsTags(), 1)
 	metrics.Count("datadog.trace_agent.receiver.stats_buckets", int64(len(in.Stats)), ts.AsTags(), 1)
 
-	r.statsProcessor.ProcessStats(in, req.Header.Get(headerLang))
+	r.statsProcessor.ProcessStats(in, req.Header.Get(headerLang), req.Header.Get(headerTracerVersion))
 }
 
 // handleTraces knows how to handle a bunch of traces
@@ -479,7 +488,9 @@ func (r *HTTPReceiver) handleTraces(v Version, w http.ResponseWriter, req *http.
 		ContainerTags:          getContainerTags(req.Header.Get(headerContainerID)),
 		ClientComputedTopLevel: req.Header.Get(headerComputedTopLevel) != "",
 		ClientComputedStats:    req.Header.Get(headerComputedStats) != "",
+		ClientDroppedP0s:       droppedTracesFromHeader(req.Header, ts),
 	}
+
 	select {
 	case r.out <- payload:
 		// ok
@@ -495,6 +506,24 @@ func (r *HTTPReceiver) handleTraces(v Version, w http.ResponseWriter, req *http.
 			r.out <- payload
 		}()
 	}
+}
+
+func droppedTracesFromHeader(h http.Header, ts *info.TagStats) int64 {
+	var dropped int64
+	if v := h.Get(headerDroppedP0Traces); v != "" {
+		count, err := strconv.ParseInt(v, 10, 64)
+		if err == nil {
+			dropped = count
+			atomic.AddInt64(&ts.ClientDroppedP0Traces, count)
+		}
+	}
+	if v := h.Get(headerDroppedP0Spans); v != "" {
+		count, err := strconv.ParseInt(v, 10, 64)
+		if err == nil {
+			atomic.AddInt64(&ts.ClientDroppedP0Spans, count)
+		}
+	}
+	return dropped
 }
 
 // Payload specifies information about a set of traces received by the API.
@@ -517,6 +546,8 @@ type Payload struct {
 	// ClientComputedStats reports whether the client has computed and sent over stats
 	// so that the agent doesn't have to.
 	ClientComputedStats bool
+	// ClientDroppedP0s specifies the number of P0 traces chunks dropped by the client.
+	ClientDroppedP0s int64
 }
 
 // handleServices handle a request with a list of several services

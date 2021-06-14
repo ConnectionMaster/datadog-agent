@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package config
 
@@ -318,7 +318,7 @@ func (suite *EndpointsTestSuite) TestIsSetAndNotEmpty() {
 
 func (suite *EndpointsTestSuite) TestDefaultApiKey() {
 	suite.config.Set("api_key", "wassupkey")
-	suite.Equal("wassupkey", getLogsAPIKey(suite.config))
+	suite.Equal("wassupkey", defaultLogsConfigKeys().getLogsAPIKey())
 	endpoints, err := BuildEndpoints(HTTPConnectivityFailure)
 	suite.Nil(err)
 	suite.Equal("wassupkey", endpoints.Main.APIKey)
@@ -327,7 +327,7 @@ func (suite *EndpointsTestSuite) TestDefaultApiKey() {
 func (suite *EndpointsTestSuite) TestOverrideApiKey() {
 	suite.config.Set("api_key", "wassupkey")
 	suite.config.Set("logs_config.api_key", "wassuplogskey")
-	suite.Equal("wassuplogskey", getLogsAPIKey(suite.config))
+	suite.Equal("wassuplogskey", defaultLogsConfigKeys().getLogsAPIKey())
 	endpoints, err := BuildEndpoints(HTTPConnectivityFailure)
 	suite.Nil(err)
 	suite.Equal("wassuplogskey", endpoints.Main.APIKey)

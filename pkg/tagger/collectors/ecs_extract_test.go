@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build docker
 
@@ -31,7 +31,7 @@ func TestECSParseTasks(t *testing.T) {
 	for nb, tc := range []struct {
 		input    []v1.Task
 		expected []*TagInfo
-		handler  func(containerID string, tags *utils.TagList)
+		handler  func(containerID string, tags *utils.TagList) error
 		err      error
 	}{
 		{
@@ -101,7 +101,7 @@ func TestECSParseTasks(t *testing.T) {
 					},
 				},
 			},
-			handler: func(containerID string, tags *utils.TagList) {
+			handler: func(containerID string, tags *utils.TagList) error {
 				task := v3.Task{
 					ContainerInstanceTags: map[string]string{
 						"instance_type": "type1",
@@ -113,6 +113,7 @@ func TestECSParseTasks(t *testing.T) {
 				}
 				addResourceTags(tags, task.ContainerInstanceTags)
 				addResourceTags(tags, task.TaskTags)
+				return nil
 			},
 			expected: []*TagInfo{
 				{

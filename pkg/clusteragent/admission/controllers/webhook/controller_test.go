@@ -1,13 +1,14 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build kubeapiserver
 
 package webhook
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"testing"
@@ -175,13 +176,13 @@ func (f *fixture) run(t *testing.T) *Controller {
 
 func (f *fixture) populateSecretsCache(secrets ...*corev1.Secret) {
 	for _, s := range secrets {
-		_, _ = f.client.CoreV1().Secrets(s.Namespace).Create(s)
+		_, _ = f.client.CoreV1().Secrets(s.Namespace).Create(context.TODO(), s, metav1.CreateOptions{})
 	}
 }
 
 func (f *fixture) populateWebhooksCache(webhooks ...*admiv1beta1.MutatingWebhookConfiguration) {
 	for _, w := range webhooks {
-		_, _ = f.client.AdmissionregistrationV1beta1().MutatingWebhookConfigurations().Create(w)
+		_, _ = f.client.AdmissionregistrationV1beta1().MutatingWebhookConfigurations().Create(context.TODO(), w, metav1.CreateOptions{})
 	}
 }
 

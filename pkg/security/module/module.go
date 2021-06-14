@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build linux
 
@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -23,14 +22,18 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 
-	"github.com/DataDog/datadog-agent/cmd/system-probe/api"
+	"github.com/DataDog/datadog-agent/cmd/system-probe/api/module"
 	sapi "github.com/DataDog/datadog-agent/pkg/security/api"
-	"github.com/DataDog/datadog-agent/pkg/security/config"
+	sconfig "github.com/DataDog/datadog-agent/pkg/security/config"
+	agentLogger "github.com/DataDog/datadog-agent/pkg/security/log"
+	"github.com/DataDog/datadog-agent/pkg/security/metrics"
+	"github.com/DataDog/datadog-agent/pkg/security/model"
 	"github.com/DataDog/datadog-agent/pkg/security/probe"
 	sprobe "github.com/DataDog/datadog-agent/pkg/security/probe"
 	"github.com/DataDog/datadog-agent/pkg/security/rules"
 	"github.com/DataDog/datadog-agent/pkg/security/secl/eval"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
+	"github.com/DataDog/datadog-agent/pkg/version"
 	"github.com/DataDog/datadog-go/statsd"
 )
 
@@ -38,7 +41,7 @@ import (
 type Module struct {
 	sync.RWMutex
 	probe          *sprobe.Probe
-	config         *config.Config
+	config         *sconfig.Config
 	ruleSets       [2]*rules.RuleSet
 	currentRuleSet uint64
 	reloading      uint64
@@ -48,10 +51,12 @@ type Module struct {
 	listener       net.Listener
 	rateLimiter    *RateLimiter
 	sigupChan      chan os.Signal
+	ctx            context.Context
+	cancelFnc      context.CancelFunc
 }
 
 // Register the runtime security agent module
-func (m *Module) Register(httpMux *http.ServeMux) error {
+func (m *Module) Register(_ *module.Router) error {
 	// force socket cleanup of previous socket not cleanup
 	os.Remove(m.config.SocketPath)
 
@@ -70,6 +75,9 @@ func (m *Module) Register(httpMux *http.ServeMux) error {
 			log.Error(err)
 		}
 	}()
+
+	// start api server
+	m.apiServer.Start(m.ctx)
 
 	// initialize the eBPF manager and load the programs and maps in the kernel. At this stage, the probes are not
 	// running yet.
@@ -94,7 +102,7 @@ func (m *Module) Register(httpMux *http.ServeMux) error {
 		return err
 	}
 
-	go m.statsMonitor(context.Background())
+	go m.metricsSender()
 
 	signal.Notify(m.sigupChan, syscall.SIGHUP)
 
@@ -116,6 +124,30 @@ func (m *Module) displayReport(report *probe.Report) {
 	log.Debugf("Policy report: %s", content)
 }
 
+func (m *Module) getEventTypeEnabled() map[eval.EventType]bool {
+	enabled := make(map[eval.EventType]bool)
+
+	categories := model.GetEventTypePerCategory()
+
+	if m.config.FIMEnabled {
+		if eventTypes, exists := categories[model.FIMCategory]; exists {
+			for _, eventType := range eventTypes {
+				enabled[eventType] = true
+			}
+		}
+	}
+
+	if m.config.RuntimeEnabled {
+		if eventTypes, exists := categories[model.RuntimeCategory]; exists {
+			for _, eventType := range eventTypes {
+				enabled[eventType] = true
+			}
+		}
+	}
+
+	return enabled
+}
+
 // Reload the rule set
 func (m *Module) Reload() error {
 	m.Lock()
@@ -126,39 +158,59 @@ func (m *Module) Reload() error {
 
 	rsa := sprobe.NewRuleSetApplier(m.config, m.probe)
 
-	ruleSet := m.probe.NewRuleSet(rules.NewOptsWithParams(sprobe.SECLConstants, sprobe.SupportedDiscarders))
-	if err := rules.LoadPolicies(m.config, ruleSet); err != nil {
+	newRuleSetOpts := func() *rules.Opts {
+		return rules.NewOptsWithParams(
+			model.SECLConstants,
+			sprobe.SupportedDiscarders,
+			m.getEventTypeEnabled(),
+			sprobe.AllCustomRuleIDs(),
+			model.SECLLegacyAttributes,
+			agentLogger.DatadogAgentLogger{})
+	}
+
+	ruleSet := m.probe.NewRuleSet(newRuleSetOpts())
+
+	loadErr := rules.LoadPolicies(m.config.PoliciesDir, ruleSet)
+	if loadErr.ErrorOrNil() != nil {
+		log.Errorf("error while loading policies: %+v", loadErr.Error())
+	}
+
+	model := &model.Model{}
+	approverRuleSet := rules.NewRuleSet(model, model.NewEvent, newRuleSetOpts())
+	loadErr = rules.LoadPolicies(m.config.PoliciesDir, approverRuleSet)
+	if loadErr.ErrorOrNil() != nil {
+		log.Errorf("error while loading policies: %+v", loadErr.Error())
+	}
+
+	approvers, err := approverRuleSet.GetApprovers(sprobe.GetCapababilities())
+	if err != nil {
 		return err
 	}
 
+	atomic.StoreUint64(&m.currentRuleSet, 1-m.currentRuleSet)
+	m.ruleSets[m.currentRuleSet] = ruleSet
+
 	// analyze the ruleset, push default policies in the kernel and generate the policy report
-	report, err := rsa.Apply(ruleSet)
+	report, err := rsa.Apply(ruleSet, approvers)
 	if err != nil {
 		return err
 	}
 
 	ruleSet.AddListener(m)
-	ruleIDs := ruleSet.ListRuleIDs()
-	for _, customRuleID := range sprobe.AllCustomRuleIDs() {
-		for _, ruleID := range ruleIDs {
-			if ruleID == customRuleID {
-				return fmt.Errorf("rule ID '%s' conflicts with a custom rule ID", ruleID)
-			}
-		}
-		ruleIDs = append(ruleIDs, customRuleID)
-	}
+
+	// full list of IDs, user rules + custom
+	var ruleIDs []rules.RuleID
+	ruleIDs = append(ruleIDs, ruleSet.ListRuleIDs()...)
+	ruleIDs = append(ruleIDs, sprobe.AllCustomRuleIDs()...)
 
 	m.apiServer.Apply(ruleIDs)
 	m.rateLimiter.Apply(ruleIDs)
-
-	atomic.StoreUint64(&m.currentRuleSet, 1-m.currentRuleSet)
-	m.ruleSets[m.currentRuleSet] = ruleSet
 
 	m.displayReport(report)
 
 	// report that a new policy was loaded
 	monitor := m.probe.GetMonitor()
-	monitor.ReportRuleSetLoaded(ruleSet, time.Now())
+	monitor.ReportRuleSetLoaded(ruleSet, loadErr)
 
 	return nil
 }
@@ -166,6 +218,7 @@ func (m *Module) Reload() error {
 // Close the module
 func (m *Module) Close() {
 	close(m.sigupChan)
+	m.cancelFnc()
 
 	if m.grpcServer != nil {
 		m.grpcServer.Stop()
@@ -185,7 +238,7 @@ func (m *Module) EventDiscarderFound(rs *rules.RuleSet, event eval.Event, field 
 		return
 	}
 
-	if err := m.probe.OnNewDiscarder(rs, event.(*sprobe.Event), field, eventType); err != nil {
+	if err := m.probe.OnNewDiscarder(rs, event.(*probe.Event), field, eventType); err != nil {
 		log.Trace(err)
 	}
 }
@@ -199,33 +252,60 @@ func (m *Module) HandleEvent(event *sprobe.Event) {
 
 // HandleCustomEvent is called by the probe when an event should be sent to Datadog but doesn't need evaluation
 func (m *Module) HandleCustomEvent(rule *rules.Rule, event *sprobe.CustomEvent) {
-	m.SendEvent(rule, event)
+	m.SendEvent(rule, event, func() []string { return nil })
 }
 
 // RuleMatch is called by the ruleset when a rule matches
 func (m *Module) RuleMatch(rule *rules.Rule, event eval.Event) {
-	m.SendEvent(rule, event)
+	// prepare the event
+	m.probe.OnRuleMatch(rule, event.(*probe.Event))
+
+	// needs to be resolved here, outside of the callback as using process tree
+	// which can be modified during queuing
+	service := event.(*probe.Event).GetProcessServiceTag()
+
+	id := event.(*probe.Event).ContainerContext.ID
+
+	extTagsCb := func() []string {
+		var tags []string
+
+		// check from tagger
+		if service == "" {
+			service = m.probe.GetResolvers().TagsResolver.GetValue(id, "service")
+		}
+
+		if service == "" {
+			service = m.config.HostServiceName
+		}
+
+		if service != "" {
+			tags = append(tags, "service:"+service)
+		}
+		return append(tags, m.probe.GetResolvers().TagsResolver.Resolve(id)...)
+	}
+
+	m.SendEvent(rule, event, extTagsCb)
 }
 
 // SendEvent sends an event to the backend after checking that the rate limiter allows it for the provided rule
-func (m *Module) SendEvent(rule *rules.Rule, event Event) {
+func (m *Module) SendEvent(rule *rules.Rule, event Event, extTagsCb func() []string) {
 	if m.rateLimiter.Allow(rule.ID) {
-		m.apiServer.SendEvent(rule, event)
+		m.apiServer.SendEvent(rule, event, extTagsCb)
 	} else {
 		log.Tracef("Event on rule %s was dropped due to rate limiting", rule.ID)
 	}
 }
 
-func (m *Module) statsMonitor(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+func (m *Module) metricsSender() {
+	statsTicker := time.NewTicker(m.config.StatsPollingInterval)
+	defer statsTicker.Stop()
 
-	ticker := time.NewTicker(m.config.StatsPollingInterval)
-	defer ticker.Stop()
+	heartbeatTicker := time.NewTicker(15 * time.Second)
+	defer heartbeatTicker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-statsTicker.C:
 			if err := m.probe.SendStats(); err != nil {
 				log.Debug(err)
 			}
@@ -235,7 +315,14 @@ func (m *Module) statsMonitor(ctx context.Context) {
 			if err := m.apiServer.SendStats(); err != nil {
 				log.Debug(err)
 			}
-		case <-ctx.Done():
+		case <-heartbeatTicker.C:
+			tags := []string{fmt.Sprintf("version:%s", version.AgentVersion)}
+			if m.config.RuntimeEnabled {
+				_ = m.statsdClient.Gauge(metrics.MetricSecurityAgentRuntimeRunning, 1, tags, 1)
+			} else if m.config.FIMEnabled {
+				_ = m.statsdClient.Gauge(metrics.MetricSecurityAgentFIMRunning, 1, tags, 1)
+			}
+		case <-m.ctx.Done():
 			return
 		}
 	}
@@ -265,7 +352,7 @@ func (m *Module) GetRuleSet() *rules.RuleSet {
 }
 
 // NewModule instantiates a runtime security system-probe module
-func NewModule(cfg *config.Config) (api.Module, error) {
+func NewModule(cfg *sconfig.Config) (module.Module, error) {
 	var statsdClient *statsd.Client
 	var err error
 	if cfg != nil {
@@ -278,7 +365,7 @@ func NewModule(cfg *config.Config) (api.Module, error) {
 			return nil, err
 		}
 	} else {
-		log.Warn("Logs won't be send to DataDog")
+		log.Warn("metrics won't be sent to DataDog")
 	}
 
 	probe, err := sprobe.NewProbe(cfg, statsdClient)
@@ -286,15 +373,22 @@ func NewModule(cfg *config.Config) (api.Module, error) {
 		return nil, err
 	}
 
+	ctx, cancelFnc := context.WithCancel(context.Background())
+
+	// custom limiters
+	limits := make(map[rules.RuleID]Limit)
+
 	m := &Module{
 		config:         cfg,
 		probe:          probe,
 		statsdClient:   statsdClient,
 		apiServer:      NewAPIServer(cfg, probe, statsdClient),
 		grpcServer:     grpc.NewServer(),
-		rateLimiter:    NewRateLimiter(statsdClient),
+		rateLimiter:    NewRateLimiter(statsdClient, LimiterOpts{Limits: limits}),
 		sigupChan:      make(chan os.Signal, 1),
 		currentRuleSet: 1,
+		ctx:            ctx,
+		cancelFnc:      cancelFnc,
 	}
 
 	sapi.RegisterSecurityModuleServer(m.grpcServer, m.apiServer)

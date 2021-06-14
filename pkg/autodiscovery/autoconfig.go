@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package autodiscovery
 
@@ -645,4 +645,16 @@ func (ac *AutoConfig) processDelService(svc listeners.Service) {
 			LogsExcluded:    svc.HasFilter(containers.LogsFilter),
 		},
 	})
+}
+
+// GetAutodiscoveryErrors fetches AD errors from each ConfigProvider
+func (ac *AutoConfig) GetAutodiscoveryErrors() map[string]map[string]providers.ErrorMsgSet {
+	errors := map[string]map[string]providers.ErrorMsgSet{}
+	for _, pd := range ac.providers {
+		configErrors := pd.provider.GetConfigErrors()
+		if len(configErrors) > 0 {
+			errors[pd.provider.String()] = configErrors
+		}
+	}
+	return errors
 }

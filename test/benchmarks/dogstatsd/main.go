@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package main
 
@@ -225,8 +225,8 @@ func main() {
 
 	mockConfig.Set("dogstatsd_stats_enable", true)
 	mockConfig.Set("dogstatsd_stats_buffer", 100)
-	s := serializer.NewSerializer(f)
-	aggr := aggregator.InitAggregator(s, "localhost")
+	s := serializer.NewSerializer(f, nil)
+	aggr := aggregator.InitAggregator(s, nil, "localhost")
 	statsd, err := dogstatsd.NewServer(aggr.GetBufferedChannels(), nil)
 	if err != nil {
 		log.Errorf("Problem allocating dogstatsd server: %s", err)

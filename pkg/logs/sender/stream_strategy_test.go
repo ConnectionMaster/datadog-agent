@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package sender
 
@@ -24,7 +24,7 @@ func TestStreamStrategy(t *testing.T) {
 		return nil
 	}
 
-	go StreamStrategy.Send(input, output, success, nil)
+	go StreamStrategy.Send(input, output, success)
 
 	content = []byte("a")
 	message1 := message.NewMessage(content, nil, "", 0)
@@ -54,7 +54,7 @@ func TestStreamStrategyShouldNotBlockWhenForceStopping(t *testing.T) {
 		close(input)
 	}()
 
-	StreamStrategy.Send(input, output, success, nil)
+	StreamStrategy.Send(input, output, success)
 }
 
 func TestStreamStrategyShouldNotBlockWhenStoppingGracefully(t *testing.T) {
@@ -73,5 +73,5 @@ func TestStreamStrategyShouldNotBlockWhenStoppingGracefully(t *testing.T) {
 		assert.Equal(t, message, <-output)
 	}()
 
-	StreamStrategy.Send(input, output, success, nil)
+	StreamStrategy.Send(input, output, success)
 }

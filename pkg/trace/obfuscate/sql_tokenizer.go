@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package obfuscate
 
@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/DataDog/datadog-agent/pkg/trace/config"
 )
 
 // tokenizer.go implemenents a lexer-like iterator that tokenizes SQL and CQL
@@ -39,6 +41,8 @@ const (
 	Null
 	String
 	DoubleQuotedString
+	DollarQuotedString // https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-DOLLAR-QUOTING
+	DollarQuotedFunc   // a dollar-quoted string delimited by the tag "$func$"; gets special treatment when feature "dollar_quoted_func" is set
 	Number
 	BooleanLiteral
 	ValueArg
@@ -66,6 +70,12 @@ const (
 	// tokens.
 	FilteredGroupable
 
+	// FilteredGroupableParenthesis is a parenthesis marked as filtered groupable. It is the
+	// beginning of either a group of values ('(') or a nested query. We track is as
+	// a special case for when it may start a nested query as opposed to just another
+	// value group to be obfuscated.
+	FilteredGroupableParenthesis
+
 	// Filtered specifies that the token is a comma and was discarded by one
 	// of the filters.
 	Filtered
@@ -75,6 +85,50 @@ const (
 	// See issue https://github.com/DataDog/datadog-trace-agent/issues/475.
 	FilteredBracketedIdentifier
 )
+
+var tokenKindStrings = map[TokenKind]string{
+	LexError:                     "LexError",
+	ID:                           "ID",
+	Limit:                        "Limit",
+	Null:                         "Null",
+	String:                       "String",
+	DoubleQuotedString:           "DoubleQuotedString",
+	DollarQuotedString:           "DollarQuotedString",
+	DollarQuotedFunc:             "DollarQuotedFunc",
+	Number:                       "Number",
+	BooleanLiteral:               "BooleanLiteral",
+	ValueArg:                     "ValueArg",
+	ListArg:                      "ListArg",
+	Comment:                      "Comment",
+	Variable:                     "Variable",
+	Savepoint:                    "Savepoint",
+	PreparedStatement:            "PreparedStatement",
+	EscapeSequence:               "EscapeSequence",
+	NullSafeEqual:                "NullSafeEqual",
+	LE:                           "LE",
+	GE:                           "GE",
+	NE:                           "NE",
+	As:                           "As",
+	From:                         "From",
+	Update:                       "Update",
+	Insert:                       "Insert",
+	Into:                         "Into",
+	Join:                         "Join",
+	TableName:                    "TableName",
+	ColonCast:                    "ColonCast",
+	FilteredGroupable:            "FilteredGroupable",
+	FilteredGroupableParenthesis: "FilteredGroupableParenthesis",
+	Filtered:                     "Filtered",
+	FilteredBracketedIdentifier:  "FilteredBracketedIdentifier",
+}
+
+func (k TokenKind) String() string {
+	str, ok := tokenKindStrings[k]
+	if !ok {
+		return "<unknown>"
+	}
+	return str
+}
 
 const escapeCharacter = '\\'
 
@@ -247,7 +301,24 @@ func (tkn *SQLTokenizer) Scan() (TokenKind, []byte) {
 			// modulo operator (e.g. 'id % 8')
 			return TokenKind(ch), tkn.bytes()
 		case '$':
-			return tkn.scanPreparedStatement('$')
+			if isDigit(tkn.lastChar) {
+				// TODO(gbbr): the first digit after $ does not necessarily guarantee
+				// that this isn't a dollar-quoted string constant. We might eventually
+				// want to cover for this use-case too (e.g. $1$some text$1$).
+				return tkn.scanPreparedStatement('$')
+			}
+			kind, tok := tkn.scanDollarQuotedString()
+			if kind == DollarQuotedFunc {
+				// this is considered an embedded query, we should try and
+				// obfuscate it
+				out, err := attemptObfuscation(NewSQLTokenizer(string(tok), tkn.literalEscapes))
+				if err != nil {
+					// if we can't obfuscate it, treat it as a regular string
+					return DollarQuotedString, tok
+				}
+				tok = append(append([]byte("$func$"), []byte(out.Query)...), []byte("$func$")...)
+			}
+			return kind, tok
 		case '{':
 			if tkn.pos == 1 || tkn.curlys > 0 {
 				// Do not fully obfuscate top-level SQL escape sequences like {{[?=]call procedure-name[([parameter][,parameter]...)]}.
@@ -374,6 +445,56 @@ func (tkn *SQLTokenizer) scanFormatParameter(prefix rune) (TokenKind, []byte) {
 	return Variable, tkn.bytes()
 }
 
+// scanDollarQuotedString scans a Postgres dollar-quoted string constant.
+// See: https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-DOLLAR-QUOTING
+func (tkn *SQLTokenizer) scanDollarQuotedString() (TokenKind, []byte) {
+	kind, tag := tkn.scanString('$', String)
+	if kind == LexError {
+		return kind, tkn.bytes()
+	}
+	var (
+		got int
+		buf bytes.Buffer
+	)
+	delim := tag
+	// on empty strings, tkn.scanString returns the delimiters
+	if string(delim) != "$$" {
+		// on non-empty strings, the delimiter is $tag$
+		delim = append([]byte{'$'}, delim...)
+		delim = append(delim, '$')
+	}
+	for {
+		ch := tkn.lastChar
+		tkn.advance()
+		if ch == EndChar {
+			tkn.setErr("unexpected EOF in dollar-quoted string")
+			return LexError, buf.Bytes()
+		}
+		if byte(ch) == delim[got] {
+			got++
+			if got == len(delim) {
+				break
+			}
+			continue
+		}
+		if got > 0 {
+			_, err := buf.Write(delim[:got])
+			if err != nil {
+				tkn.setErr("error reading dollar-quoted string: %v", err)
+				return LexError, buf.Bytes()
+			}
+			got = 0
+		}
+		buf.WriteRune(ch)
+	}
+	if config.HasFeature("dollar_quoted_func") && string(delim) == "$func$" {
+		// dolar_quoted_func: treat "$func" delimited dollar-quoted strings
+		// differently and do not obfuscate them as a string
+		return DollarQuotedFunc, buf.Bytes()
+	}
+	return DollarQuotedString, buf.Bytes()
+}
+
 func (tkn *SQLTokenizer) scanPreparedStatement(prefix rune) (TokenKind, []byte) {
 	// a prepared statement expect a digit identifier like $1
 	if !isDigit(tkn.lastChar) {
@@ -490,7 +611,7 @@ exit:
 }
 
 func (tkn *SQLTokenizer) scanString(delim rune, kind TokenKind) (TokenKind, []byte) {
-	buffer := &bytes.Buffer{}
+	buf := bytes.NewBuffer(tkn.buf[:0])
 	for {
 		ch := tkn.lastChar
 		tkn.advance()
@@ -513,19 +634,18 @@ func (tkn *SQLTokenizer) scanString(delim rune, kind TokenKind) (TokenKind, []by
 		}
 		if ch == EndChar {
 			tkn.setErr("unexpected EOF in string")
-			return LexError, buffer.Bytes()
+			return LexError, buf.Bytes()
 		}
-		buffer.WriteRune(ch)
+		buf.WriteRune(ch)
 	}
-	buf := buffer.Bytes()
-	if kind == ID && len(buf) == 0 || bytes.IndexFunc(buf, func(r rune) bool { return !unicode.IsSpace(r) }) == -1 {
+	if kind == ID && buf.Len() == 0 || bytes.IndexFunc(buf.Bytes(), func(r rune) bool { return !unicode.IsSpace(r) }) == -1 {
 		// This string is an empty or white-space only identifier.
 		// We should keep the start and end delimiters in order to
 		// avoid creating invalid queries.
 		// See: https://github.com/DataDog/datadog-trace-agent/issues/316
 		return kind, append(runeBytes(delim), runeBytes(delim)...)
 	}
-	return kind, buf
+	return kind, buf.Bytes()
 }
 
 func (tkn *SQLTokenizer) scanCommentType1(prefix string) (TokenKind, []byte) {

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package providers
 
@@ -18,15 +18,15 @@ import (
 
 func TestGetIntegrationConfig(t *testing.T) {
 	// file does not exist
-	config, err := GetIntegrationConfigFromFile("foo", "")
+	_, err := GetIntegrationConfigFromFile("foo", "")
 	assert.NotNil(t, err)
 
 	// file contains invalid Yaml
-	config, err = GetIntegrationConfigFromFile("foo", "tests/invalid.yaml")
+	_, err = GetIntegrationConfigFromFile("foo", "tests/invalid.yaml")
 	assert.NotNil(t, err)
 
 	// valid yaml, invalid configuration file
-	config, err = GetIntegrationConfigFromFile("foo", "tests/notaconfig.yaml")
+	config, err := GetIntegrationConfigFromFile("foo", "tests/notaconfig.yaml")
 	assert.NotNil(t, err)
 	assert.Equal(t, len(config.Instances), 0)
 

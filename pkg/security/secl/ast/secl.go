@@ -1,13 +1,14 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package ast
 
 import (
 	"bytes"
 	"strconv"
+	"time"
 
 	"github.com/alecthomas/participle"
 	"github.com/alecthomas/participle/lexer"
@@ -17,6 +18,8 @@ import (
 var (
 	seclLexer = lexer.Must(ebnf.New(`
 Comment = ("#" | "//") { "\u0000"…"\uffff"-"\n" } .
+Duration = digit { digit } ("ms" | "s" | "m" | "h" | "d") .
+Regexp = "r\"" { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } "\"" .
 Ident = (alpha | "_") { "_" | alpha | digit | "." | "[" | "]" } .
 String = "\"" { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } "\"" .
 Pattern = "~\"" { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } "\"" .
@@ -39,12 +42,24 @@ func unquotePattern(t lexer.Token) (lexer.Token, error) {
 	return t, nil
 }
 
+func parseDuration(t lexer.Token) (lexer.Token, error) {
+	duration, err := time.ParseDuration(t.Value)
+	if err != nil {
+		return t, participle.Errorf(t.Pos, "invalid duration string %q: %s", t.Value, err)
+	}
+
+	t.Value = strconv.Itoa(int(duration.Nanoseconds()))
+
+	return t, nil
+}
+
 func buildParser(obj interface{}) (*participle.Parser, error) {
 	return participle.Build(obj,
 		participle.Lexer(seclLexer),
 		participle.Elide("Whitespace", "Comment"),
 		participle.Unquote("String"),
-		participle.Map(unquotePattern, "Pattern"),
+		participle.Map(parseDuration, "Duration"),
+		participle.Map(unquotePattern, "Pattern", "Regexp"),
 	)
 }
 
@@ -112,7 +127,7 @@ type Expression struct {
 	Pos lexer.Position
 
 	Comparison *Comparison        `parser:"@@"`
-	Op         *string            `parser:"[ @( \"|\" \"|\" | \"&\" \"&\" )"`
+	Op         *string            `parser:"[ @( \"|\" \"|\" | \"or\" | \"&\" \"&\" | \"and\" )"`
 	Next       *BooleanExpression `parser:"@@ ]"`
 }
 
@@ -129,7 +144,7 @@ type Comparison struct {
 type ScalarComparison struct {
 	Pos lexer.Position
 
-	Op   *string     `parser:"@( \">\" | \">\" \"=\" | \"<\" | \"<\" \"=\" | \"!\" \"=\" | \"=\" \"=\" | \"=\" \"~\" | \"!\" \"~\" )"`
+	Op   *string     `parser:"@( \">\" \"=\" | \">\" | \"<\" \"=\" | \"<\" | \"!\" \"=\" | \"=\" \"=\" | \"=\" \"~\" | \"!\" \"~\" )"`
 	Next *Comparison `parser:"@@"`
 }
 
@@ -154,7 +169,7 @@ type BitOperation struct {
 type Unary struct {
 	Pos lexer.Position
 
-	Op      *string  `parser:"( @( \"!\" | \"-\" | \"^\" )"`
+	Op      *string  `parser:"( @( \"!\" | \"not\" | \"-\" | \"^\" )"`
 	Unary   *Unary   `parser:"@@ )"`
 	Primary *Primary `parser:"| @@"`
 }
@@ -168,6 +183,8 @@ type Primary struct {
 	Number        *int        `parser:"| @Int"`
 	String        *string     `parser:"| @String"`
 	Pattern       *string     `parser:"| @Pattern"`
+	Regexp        *string     `parser:"| @Regexp"`
+	Duration      *int        `parser:"| @Duration"`
 	SubExpression *Expression `parser:"| \"(\" @@ \")\""`
 }
 
@@ -177,6 +194,7 @@ type StringMember struct {
 
 	String  *string `parser:"@String"`
 	Pattern *string `parser:"| @Pattern"`
+	Regexp  *string `parser:"| @Regexp"`
 }
 
 // Array describes an array of values

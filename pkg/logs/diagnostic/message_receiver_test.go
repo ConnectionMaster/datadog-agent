@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 package diagnostic
 
 import (
@@ -17,29 +17,31 @@ func TestEnableDisable(t *testing.T) {
 	assert.True(t, b.SetEnabled(true))
 	assert.False(t, b.SetEnabled(true))
 
-	for i := 0; i < 10; i++ {
-		b.HandleMessage(newMessage("", "", ""))
-	}
+	b.HandleMessage(newMessage("", "", ""), []byte("a"))
 
-	msg, ok := b.Next(nil)
-	assert.True(t, ok)
+	done := make(chan struct{})
+	defer close(done)
+	lineChan := b.Filter(nil, done)
+	msg := <-lineChan
 	assert.NotEqual(t, "", msg)
 
 	b.SetEnabled(false)
 
-	// buffered messages should be cleared
-	msg, ok = b.Next(nil)
-	assert.False(t, ok)
-	assert.Equal(t, "", msg)
-
-	for i := 0; i < 10; i++ {
-		b.HandleMessage(newMessage("", "", ""))
+	select {
+	case <-lineChan:
+		// buffered messages should be cleared
+		t.Fail()
+	default:
 	}
 
-	// disabled, no messages should have been buffered
-	msg, ok = b.Next(nil)
-	assert.False(t, ok)
-	assert.Equal(t, "", msg)
+	b.HandleMessage(newMessage("", "", ""), []byte("a"))
+
+	select {
+	case <-lineChan:
+		// disabled, no messages should have been buffered
+		t.Fail()
+	default:
+	}
 }
 
 func TestFilterAll(t *testing.T) {
@@ -48,9 +50,9 @@ func TestFilterAll(t *testing.T) {
 	b.SetEnabled(true)
 
 	for i := 0; i < 5; i++ {
-		b.HandleMessage(newMessage("test1", "a", "b"))
-		b.HandleMessage(newMessage("test1", "1", "2"))
-		b.HandleMessage(newMessage("test2", "a", "b"))
+		b.HandleMessage(newMessage("test1", "a", "b"), []byte("a"))
+		b.HandleMessage(newMessage("test1", "1", "2"), []byte("a"))
+		b.HandleMessage(newMessage("test2", "a", "b"), []byte("a"))
 	}
 
 	filters := Filters{
@@ -58,16 +60,7 @@ func TestFilterAll(t *testing.T) {
 		Type:   "a",
 		Source: "b",
 	}
-
-	for i := 0; i < 5; i++ {
-		msg, ok := b.Next(&filters)
-		assert.True(t, ok)
-		assert.NotEqual(t, "", msg)
-	}
-
-	// Should be out of messages - have found 5 matches out of 10
-	_, ok := b.Next(&filters)
-	assert.False(t, ok)
+	readFilteredLines(t, b, &filters, 5)
 }
 
 func TestFilterTypeAndSource(t *testing.T) {
@@ -76,8 +69,8 @@ func TestFilterTypeAndSource(t *testing.T) {
 	b.SetEnabled(true)
 
 	for i := 0; i < 5; i++ {
-		b.HandleMessage(newMessage("test", "a", "b"))
-		b.HandleMessage(newMessage("test", "1", "2"))
+		b.HandleMessage(newMessage("test", "a", "b"), []byte("a"))
+		b.HandleMessage(newMessage("test", "1", "2"), []byte("a"))
 	}
 
 	filters := Filters{
@@ -85,15 +78,7 @@ func TestFilterTypeAndSource(t *testing.T) {
 		Source: "b",
 	}
 
-	for i := 0; i < 5; i++ {
-		msg, ok := b.Next(&filters)
-		assert.True(t, ok)
-		assert.NotEqual(t, "", msg)
-	}
-
-	// Should be out of messages - have found 5 matches out of 10
-	_, ok := b.Next(&filters)
-	assert.False(t, ok)
+	readFilteredLines(t, b, &filters, 5)
 }
 
 func TestFilterName(t *testing.T) {
@@ -102,24 +87,16 @@ func TestFilterName(t *testing.T) {
 	b.SetEnabled(true)
 
 	for i := 0; i < 5; i++ {
-		b.HandleMessage(newMessage("test1", "a", "b"))
-		b.HandleMessage(newMessage("test2", "a", "2"))
-		b.HandleMessage(newMessage("test2", "b", "2"))
+		b.HandleMessage(newMessage("test1", "a", "b"), []byte("a"))
+		b.HandleMessage(newMessage("test2", "a", "2"), []byte("a"))
+		b.HandleMessage(newMessage("test2", "b", "2"), []byte("a"))
 	}
 
 	filters := Filters{
 		Name: "test2",
 	}
 
-	for i := 0; i < 10; i++ {
-		msg, ok := b.Next(&filters)
-		assert.True(t, ok)
-		assert.NotEqual(t, "", msg)
-	}
-
-	// Should be out of messages - have found 10 matches out of 15
-	_, ok := b.Next(&filters)
-	assert.False(t, ok)
+	readFilteredLines(t, b, &filters, 10)
 }
 
 func TestFilterSource(t *testing.T) {
@@ -128,24 +105,16 @@ func TestFilterSource(t *testing.T) {
 	b.SetEnabled(true)
 
 	for i := 0; i < 5; i++ {
-		b.HandleMessage(newMessage("test", "a", "b"))
-		b.HandleMessage(newMessage("test", "a", "2"))
-		b.HandleMessage(newMessage("test", "b", "2"))
+		b.HandleMessage(newMessage("test", "a", "b"), []byte("a"))
+		b.HandleMessage(newMessage("test", "a", "2"), []byte("a"))
+		b.HandleMessage(newMessage("test", "b", "2"), []byte("a"))
 	}
 
 	filters := Filters{
 		Source: "2",
 	}
 
-	for i := 0; i < 10; i++ {
-		msg, ok := b.Next(&filters)
-		assert.True(t, ok)
-		assert.NotEqual(t, "", msg)
-	}
-
-	// Should be out of messages - have found 10 matches out of 15
-	_, ok := b.Next(&filters)
-	assert.False(t, ok)
+	readFilteredLines(t, b, &filters, 10)
 }
 
 func TestFilterType(t *testing.T) {
@@ -154,24 +123,16 @@ func TestFilterType(t *testing.T) {
 	b.SetEnabled(true)
 
 	for i := 0; i < 5; i++ {
-		b.HandleMessage(newMessage("test", "a", "b"))
-		b.HandleMessage(newMessage("test", "a", "2"))
-		b.HandleMessage(newMessage("test", "b", "2"))
+		b.HandleMessage(newMessage("test", "a", "b"), []byte("a"))
+		b.HandleMessage(newMessage("test", "a", "2"), []byte("a"))
+		b.HandleMessage(newMessage("test", "b", "2"), []byte("a"))
 	}
 
 	filters := Filters{
 		Type: "a",
 	}
 
-	for i := 0; i < 10; i++ {
-		msg, ok := b.Next(&filters)
-		assert.True(t, ok)
-		assert.NotEqual(t, "", msg)
-	}
-
-	// Should be out of messages - have found 10 matches out of 15
-	_, ok := b.Next(&filters)
-	assert.False(t, ok)
+	readFilteredLines(t, b, &filters, 10)
 }
 
 func TestNoFilters(t *testing.T) {
@@ -180,9 +141,9 @@ func TestNoFilters(t *testing.T) {
 	b.SetEnabled(true)
 
 	for i := 0; i < 5; i++ {
-		b.HandleMessage(newMessage("test", "a", "b"))
-		b.HandleMessage(newMessage("test", "a", "2"))
-		b.HandleMessage(newMessage("test", "b", "2"))
+		b.HandleMessage(newMessage("test", "a", "b"), []byte("a"))
+		b.HandleMessage(newMessage("test", "a", "2"), []byte("a"))
+		b.HandleMessage(newMessage("test", "b", "2"), []byte("a"))
 	}
 
 	filters := Filters{
@@ -190,15 +151,7 @@ func TestNoFilters(t *testing.T) {
 		Source: "",
 	}
 
-	for i := 0; i < 15; i++ {
-		msg, ok := b.Next(&filters)
-		assert.True(t, ok)
-		assert.NotEqual(t, "", msg)
-	}
-
-	// Should be out of messages - have found 15 matches out of 15
-	_, ok := b.Next(&filters)
-	assert.False(t, ok)
+	readFilteredLines(t, b, &filters, 15)
 }
 
 func newMessage(n string, t string, s string) message.Message {
@@ -209,4 +162,22 @@ func newMessage(n string, t string, s string) message.Message {
 	source := config.NewLogSource(n, cfg)
 	origin := message.NewOrigin(source)
 	return *message.NewMessage([]byte("a"), origin, "", 0)
+}
+
+func readFilteredLines(t *testing.T, b *BufferedMessageReceiver, filters *Filters, expectedLineCount int) {
+	done := make(chan struct{})
+	defer close(done)
+	lineChan := b.Filter(filters, done)
+
+	for i := 0; i < expectedLineCount; i++ {
+		msg := <-lineChan
+		assert.NotEqual(t, "", msg)
+	}
+
+	select {
+	case <-lineChan:
+		// Should be out of messages
+		t.Fail()
+	default:
+	}
 }

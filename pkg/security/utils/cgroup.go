@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build linux
 
@@ -90,7 +90,7 @@ func GetProcControlGroups(tgid, pid uint32) ([]ControlGroup, error) {
 func GetProcContainerID(tgid, pid uint32) (ContainerID, error) {
 	cgroups, err := GetProcControlGroups(tgid, pid)
 	if err != nil {
-		return ContainerID(""), err
+		return "", err
 	}
 
 	for _, cgroup := range cgroups {
@@ -98,5 +98,5 @@ func GetProcContainerID(tgid, pid uint32) (ContainerID, error) {
 			return containerID, nil
 		}
 	}
-	return ContainerID(""), nil
+	return "", nil
 }

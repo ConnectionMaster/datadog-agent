@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build linux
 
@@ -10,12 +10,15 @@ package probe
 import (
 	"context"
 	"os"
+	"path"
 	"sort"
+	"strings"
 
-	"github.com/DataDog/datadog-go/statsd"
 	"github.com/avast/retry-go"
 	"github.com/pkg/errors"
 
+	"github.com/DataDog/datadog-agent/pkg/security/config"
+	"github.com/DataDog/datadog-agent/pkg/security/model"
 	"github.com/DataDog/datadog-agent/pkg/security/utils"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
@@ -29,10 +32,11 @@ type Resolvers struct {
 	TimeResolver      *TimeResolver
 	ProcessResolver   *ProcessResolver
 	UserGroupResolver *UserGroupResolver
+	TagsResolver      *TagsResolver
 }
 
 // NewResolvers creates a new instance of Resolvers
-func NewResolvers(probe *Probe, client *statsd.Client) (*Resolvers, error) {
+func NewResolvers(config *config.Config, probe *Probe) (*Resolvers, error) {
 	dentryResolver, err := NewDentryResolver(probe)
 	if err != nil {
 		return nil, err
@@ -55,9 +59,10 @@ func NewResolvers(probe *Probe, client *statsd.Client) (*Resolvers, error) {
 		TimeResolver:      timeResolver,
 		ContainerResolver: &ContainerResolver{},
 		UserGroupResolver: userGroupResolver,
+		TagsResolver:      NewTagsResolver(config),
 	}
 
-	processResolver, err := NewProcessResolver(probe, resolvers, client, NewProcessResolverOpts(true, probe.config.CookieCacheSize))
+	processResolver, err := NewProcessResolver(probe, resolvers, probe.statsdClient, NewProcessResolverOpts(probe.config.CookieCacheSize))
 	if err != nil {
 		return nil, err
 	}
@@ -67,13 +72,122 @@ func NewResolvers(probe *Probe, client *statsd.Client) (*Resolvers, error) {
 	return resolvers, nil
 }
 
+// resolveBasename resolves the inode to a filename
+func (r *Resolvers) resolveBasename(e *model.FileFields) string {
+	return r.DentryResolver.GetName(e.MountID, e.Inode, e.PathID)
+}
+
+// resolveContainerPath resolves the inode to a path relative to the container
+func (r *Resolvers) resolveContainerPath(e *model.FileFields) string {
+	containerPath, _, _, err := r.MountResolver.GetMountPath(e.MountID)
+	if err != nil {
+		return ""
+	}
+	return containerPath
+}
+
+// resolveFileFieldsPath resolves the inode to a full path. Returns the path and true if it was entirely resolved
+func (r *Resolvers) resolveFileFieldsPath(e *model.FileFields) (string, error) {
+	pathStr, err := r.DentryResolver.Resolve(e.MountID, e.Inode, e.PathID)
+	if pathStr == dentryPathKeyNotFound {
+		return pathStr, err
+	}
+
+	_, mountPath, rootPath, mountErr := r.MountResolver.GetMountPath(e.MountID)
+	if mountErr != nil {
+		return pathStr, mountErr
+	}
+
+	if strings.HasPrefix(pathStr, rootPath) && rootPath != "/" {
+		pathStr = strings.Replace(pathStr, rootPath, "", 1)
+	}
+	pathStr = path.Join(mountPath, pathStr)
+
+	return pathStr, err
+}
+
+// ResolveFilePath resolves the inode to a full path. Returns the path and true if it was entirely resolved
+func (r *Resolvers) ResolveFilePath(e *model.FileEvent) string {
+	path, _ := r.resolveFileFieldsPath(&e.FileFields)
+	return path
+}
+
+// ResolveFileFieldsUser resolves the user id of the file to a username
+func (r *Resolvers) ResolveFileFieldsUser(e *model.FileFields) string {
+	if len(e.User) == 0 {
+		e.User, _ = r.UserGroupResolver.ResolveUser(int(e.UID))
+	}
+	return e.User
+}
+
+// ResolveFileFieldsGroup resolves the group id of the file to a group name
+func (r *Resolvers) ResolveFileFieldsGroup(e *model.FileFields) string {
+	if len(e.Group) == 0 {
+		e.Group, _ = r.UserGroupResolver.ResolveGroup(int(e.GID))
+	}
+	return e.Group
+}
+
+// ResolveCredentialsUser resolves the user id of the process to a username
+func (r *Resolvers) ResolveCredentialsUser(e *model.Credentials) string {
+	if len(e.User) == 0 {
+		e.User, _ = r.UserGroupResolver.ResolveUser(int(e.UID))
+	}
+	return e.User
+}
+
+// ResolveCredentialsGroup resolves the group id of the process to a group name
+func (r *Resolvers) ResolveCredentialsGroup(e *model.Credentials) string {
+	if len(e.Group) == 0 {
+		e.Group, _ = r.UserGroupResolver.ResolveGroup(int(e.GID))
+	}
+	return e.Group
+}
+
+// ResolveCredentialsEUser resolves the effective user id of the process to a username
+func (r *Resolvers) ResolveCredentialsEUser(e *model.Credentials) string {
+	if len(e.EUser) == 0 {
+		e.EUser, _ = r.UserGroupResolver.ResolveUser(int(e.EUID))
+	}
+	return e.EUser
+}
+
+// ResolveCredentialsEGroup resolves the effective group id of the process to a group name
+func (r *Resolvers) ResolveCredentialsEGroup(e *model.Credentials) string {
+	if len(e.EGroup) == 0 {
+		e.EGroup, _ = r.UserGroupResolver.ResolveGroup(int(e.EGID))
+	}
+	return e.EGroup
+}
+
+// ResolveCredentialsFSUser resolves the file-system user id of the process to a username
+func (r *Resolvers) ResolveCredentialsFSUser(e *model.Credentials) string {
+	if len(e.FSUser) == 0 {
+		e.FSUser, _ = r.UserGroupResolver.ResolveUser(int(e.FSUID))
+	}
+	return e.FSUser
+}
+
+// ResolveCredentialsFSGroup resolves the file-system group id of the process to a group name
+func (r *Resolvers) ResolveCredentialsFSGroup(e *model.Credentials) string {
+	if len(e.FSGroup) == 0 {
+		e.FSGroup, _ = r.UserGroupResolver.ResolveGroup(int(e.FSGID))
+	}
+	return e.FSGroup
+}
+
 // Start the resolvers
 func (r *Resolvers) Start(ctx context.Context) error {
 	if err := r.ProcessResolver.Start(ctx); err != nil {
 		return err
 	}
+	r.MountResolver.Start(ctx)
 
-	return r.DentryResolver.Start()
+	if err := r.TagsResolver.Start(ctx); err != nil {
+		return err
+	}
+
+	return r.DentryResolver.Start(r.probe)
 }
 
 // Snapshot collects data on the current state of the system to populate user space and kernel space caches.
@@ -81,6 +195,8 @@ func (r *Resolvers) Snapshot() error {
 	if err := retry.Do(r.snapshot, retry.Delay(0), retry.Attempts(5)); err != nil {
 		return errors.Wrap(err, "unable to snapshot processes")
 	}
+
+	r.ProcessResolver.SetState(snapshotted)
 
 	return nil
 }
@@ -137,4 +253,10 @@ func (r *Resolvers) snapshot() error {
 	}
 
 	return nil
+}
+
+// Close cleans up any underlying resolver that requires a cleanup
+func (r *Resolvers) Close() error {
+	// clean up the dentry resolver eRPC segment
+	return r.DentryResolver.Close()
 }

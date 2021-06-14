@@ -1,15 +1,13 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package config
 
 import (
 	"fmt"
 	"strings"
-
-	"github.com/DataDog/datadog-agent/pkg/serverless/aws"
 )
 
 // Logs source types
@@ -57,9 +55,7 @@ type LogsConfig struct {
 
 	// used as input only by the Channel tailer.
 	// could have been unidirectional but the tailer could not close it in this case.
-	// TODO(remy): strongly typed to an AWS Lambda LogMessage, we should probably use
-	// a more generic type here.
-	Channel chan aws.LogMessage
+	Channel chan *ChannelMessage
 
 	Service         string
 	Source          string

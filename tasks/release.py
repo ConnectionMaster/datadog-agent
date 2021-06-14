@@ -1,7 +1,7 @@
 """
 Release helper tasks
 """
-from __future__ import print_function
+
 
 import hashlib
 import json
@@ -13,6 +13,10 @@ from datetime import date
 
 from invoke import Failure, task
 from invoke.exceptions import Exit
+
+from tasks.utils import DEFAULT_BRANCH
+
+from .modules import DEFAULT_MODULES
 
 
 @task
@@ -32,7 +36,8 @@ def add_prelude(ctx, version):
         )
 
     ctx.run("git add {}".format(new_releasenote))
-    ctx.run("git commit -m \"Add prelude for {} release\"".format(version))
+    print("\nCommit this with:")
+    print("git commit -m \"Add prelude for {} release\"".format(version))
 
 
 @task
@@ -53,13 +58,14 @@ def add_dca_prelude(ctx, version, agent7_version, agent6_version=""):
             """prelude:
     |
     Released on: {1}
-    Pinned to datadog-agent v{0}: `CHANGELOG <https://github.com/DataDog/datadog-agent/blob/master/CHANGELOG.rst#{2}{3}>`_.""".format(
-                agent7_version, date.today(), agent7_version.replace('.', ''), agent6_version,
+    Pinned to datadog-agent v{0}: `CHANGELOG <https://github.com/DataDog/datadog-agent/blob/{4}/CHANGELOG.rst#{2}{3}>`_.""".format(
+                agent7_version, date.today(), agent7_version.replace('.', ''), agent6_version, DEFAULT_BRANCH,
             )
         )
 
     ctx.run("git add {}".format(new_releasenote))
-    ctx.run("git commit -m \"Add prelude for {} release\"".format(version))
+    print("\nCommit this with:")
+    print("git commit -m \"Add prelude for {} release\"".format(version))
 
 
 @task
@@ -77,7 +83,8 @@ def add_installscript_prelude(ctx, version):
         )
 
     ctx.run("git add {}".format(new_releasenote))
-    ctx.run("git commit -m \"Add prelude for {} release\"".format(version))
+    print("\nCommit this with:")
+    print("git commit -m \"Add prelude for {} release\"".format(version))
 
 
 @task
@@ -166,12 +173,10 @@ def update_dca_changelog(ctx, new_version, agent_version):
     ctx.run("cat CHANGELOG-DCA.rst >> /tmp/new_changelog-dca.rst && mv /tmp/new_changelog-dca.rst CHANGELOG-DCA.rst")
 
     # commit new CHANGELOG
-    ctx.run(
-        "git add CHANGELOG-DCA.rst \
-            && git commit -m \"[DCA] Update CHANGELOG for {}\"".format(
-            new_version
-        )
-    )
+    ctx.run("git add CHANGELOG-DCA.rst")
+
+    print("\nCommit this with:")
+    print("git commit -m \"[DCA] Update CHANGELOG for {}\"".format(new_version))
 
 
 @task
@@ -249,12 +254,10 @@ def update_changelog(ctx, new_version):
     ctx.run("cat CHANGELOG.rst >> /tmp/new_changelog.rst && mv /tmp/new_changelog.rst CHANGELOG.rst")
 
     # commit new CHANGELOG
-    ctx.run(
-        "git add CHANGELOG.rst \
-            && git commit -m \"Update CHANGELOG for {}\"".format(
-            new_version
-        )
-    )
+    ctx.run("git add CHANGELOG.rst")
+
+    print("\nCommit this with:")
+    print("git commit -m \"[DCA] Update CHANGELOG for {}\"".format(new_version))
 
 
 @task
@@ -320,12 +323,10 @@ def update_installscript_changelog(ctx, new_version):
     )
 
     # commit new CHANGELOG-INSTALLSCRIPT
-    ctx.run(
-        "git add CHANGELOG-INSTALLSCRIPT.rst \
-            && git commit -m \"[INSTALLSCRIPT] Update CHANGELOG-INSTALLSCRIPT for {}\"".format(
-            new_version
-        )
-    )
+    ctx.run("git add CHANGELOG-INSTALLSCRIPT.rst")
+
+    print("\nCommit this with:")
+    print("git commit -m \"[INSTALLSCRIPT] Update CHANGELOG-INSTALLSCRIPT for {}\"".format(new_version))
 
 
 @task
@@ -356,7 +357,7 @@ def _find_v6_tag(ctx, v7_tag):
 
 
 @task
-def list_major_change(ctx, milestone):
+def list_major_change(_, milestone):
     """
     List all PR labeled "major_changed" for this release.
     """
@@ -415,6 +416,16 @@ def _create_version_dict_from_match(match):
     return version
 
 
+def _is_dict_version_field(key):
+    """
+    Returns a bool to indicate if the field should be stringified from a dictionary or not.
+
+    Generally all `*_VERSION` fields are parsed with regex but `WINDOWS_DDNPM_VERSION`
+    should be used as-is.
+    """
+    return "VERSION" in key and key != "WINDOWS_DDNPM_VERSION"
+
+
 def _stringify_config(config_dict):
     """
     Takes a config dict of the following form:
@@ -426,7 +437,9 @@ def _stringify_config(config_dict):
 
     and transforms all VERSIONs into their string representation.
     """
-    return {key: _stringify_version(value) if "VERSION" in key else value for key, value in config_dict.items()}
+    return {
+        key: _stringify_version(value) if _is_dict_version_field(key) else value for key, value in config_dict.items()
+    }
 
 
 def _stringify_version(version_dict):
@@ -499,6 +512,31 @@ def _get_highest_version_from_release_json(release_json, highest_major, version_
     return highest_version
 
 
+def _get_windows_ddnpm_release_json_info(
+    release_json, highest_major, version_re, is_first_rc=False,
+):
+
+    highest_release_json_version = _get_highest_version_from_release_json(release_json, highest_major, version_re)
+
+    # First RC should use the data from nightly section otherwise reuse the last RC info
+    if is_first_rc:
+        print("Using 'nightly' DDNPM values")
+        release_json_version_data = release_json['nightly']
+    else:
+        highest_release = _stringify_version(highest_release_json_version)
+        print("Using '{}' DDNPM values".format(highest_release))
+        release_json_version_data = release_json[highest_release]
+
+    win_ddnpm_driver = release_json_version_data['WINDOWS_DDNPM_DRIVER']
+    win_ddnpm_version = release_json_version_data['WINDOWS_DDNPM_VERSION']
+    win_ddnpm_shasum = release_json_version_data['WINDOWS_DDNPM_SHASUM']
+
+    if win_ddnpm_driver not in ['release-signed', 'attestation-signed']:
+        print("WARN: WINDOWS_DDNPM_DRIVER value '{}' is not valid".format(win_ddnpm_driver))
+
+    return win_ddnpm_driver, win_ddnpm_version, win_ddnpm_shasum
+
+
 def _save_release_json(
     release_json,
     list_major_versions,
@@ -509,17 +547,21 @@ def _save_release_json(
     jmxfetch_version,
     security_agent_policies_version,
     macos_build_version,
+    windows_ddnpm_driver,
+    windows_ddnpm_version,
+    windows_ddnpm_shasum,
 ):
     import requests
 
     jmxfetch = requests.get(
-        "https://bintray.com/datadog/datadog-maven/download_file?file_path=com%2Fdatadoghq%2Fjmxfetch%2F{0}%2Fjmxfetch-{0}-jar-with-dependencies.jar".format(
+        "https://oss.sonatype.org/service/local/repositories/releases/content/com/datadoghq/jmxfetch/{0}/jmxfetch-{0}-jar-with-dependencies.jar".format(
             _stringify_version(jmxfetch_version),
         )
     ).content
     jmxfetch_sha256 = hashlib.sha256(jmxfetch).hexdigest()
 
     print("Jmxfetch's SHA256 is {}".format(jmxfetch_sha256))
+    print("Windows DDNPM's SHA256 is {}".format(windows_ddnpm_shasum))
 
     new_version_config = OrderedDict()
     new_version_config["INTEGRATIONS_CORE_VERSION"] = integration_version
@@ -529,6 +571,9 @@ def _save_release_json(
     new_version_config["JMXFETCH_HASH"] = jmxfetch_sha256
     new_version_config["SECURITY_AGENT_POLICIES_VERSION"] = security_agent_policies_version
     new_version_config["MACOS_BUILD_VERSION"] = macos_build_version
+    new_version_config["WINDOWS_DDNPM_DRIVER"] = windows_ddnpm_driver
+    new_version_config["WINDOWS_DDNPM_VERSION"] = windows_ddnpm_version
+    new_version_config["WINDOWS_DDNPM_SHASUM"] = windows_ddnpm_shasum
 
     # Necessary if we want to maintain the JSON order, so that humans don't get confused
     new_release_json = OrderedDict()
@@ -568,11 +613,16 @@ def finish(
     omnibus_ruby_version=None,
     security_agent_policies_version=None,
     macos_build_version=None,
+    windows_ddnpm_driver=None,
+    windows_ddnpm_version=None,
+    windows_ddnpm_shasum=None,
     ignore_rc_tag=False,
 ):
 
     """
     Creates new entry in the release.json file for the new version. Removes all the RC entries.
+
+    Update internal module dependencies with the new version.
     """
 
     if sys.version_info[0] < 3:
@@ -582,7 +632,7 @@ def finish(
     list_major_versions = major_versions.split(",")
     print("Finishing release for major version(s) {}".format(list_major_versions))
 
-    list_major_versions = list(map(lambda x: int(x), list_major_versions))
+    list_major_versions = [int(x) for x in list_major_versions]
     highest_major = 0
     for version in list_major_versions:
         if int(version) > highest_major:
@@ -712,6 +762,14 @@ def finish(
                 return Exit(code=1)
     print("datadog-agent-macos-build' tag is {}".format(_stringify_version(macos_build_version)))
 
+    if not windows_ddnpm_version:
+        # Get info on DDNPM
+        windows_ddnpm_driver, windows_ddnpm_version, windows_ddnpm_shasum = _get_windows_ddnpm_release_json_info(
+            release_json, highest_major, version_re
+        )
+
+    print("windows ddnpm version is {}".format(windows_ddnpm_version))
+
     _save_release_json(
         release_json,
         list_major_versions,
@@ -722,7 +780,13 @@ def finish(
         jmxfetch_version,
         security_agent_policies_version,
         macos_build_version,
+        windows_ddnpm_driver,
+        windows_ddnpm_version,
+        windows_ddnpm_shasum,
     )
+
+    # Update internal module dependencies
+    update_modules(ctx, _stringify_version(highest_version))
 
 
 @task
@@ -735,11 +799,16 @@ def create_rc(
     omnibus_ruby_version=None,
     security_agent_policies_version=None,
     macos_build_version=None,
+    windows_ddnpm_driver=None,
+    windows_ddnpm_version=None,
+    windows_ddnpm_shasum=None,
 ):
 
     """
     Takes whatever version is the highest in release.json and adds a new RC to it.
     If there was no RC, creates one and bump minor version. If there was an RC, create RC + 1.
+
+    Update internal module dependencies with the new RC.
     """
 
     if sys.version_info[0] < 3:
@@ -749,7 +818,7 @@ def create_rc(
     list_major_versions = major_versions.split(",")
     print("Creating RC for agent version(s) {}".format(list_major_versions))
 
-    list_major_versions = list(map(lambda x: int(x), list_major_versions))
+    list_major_versions = [int(x) for x in list_major_versions]
     highest_major = 0
     for version in list_major_versions:
         if int(version) > highest_major:
@@ -823,6 +892,15 @@ def create_rc(
         )
     print("datadog-agent-macos-build's tag is {}".format(_stringify_version(macos_build_version)))
 
+    if not windows_ddnpm_version:
+        is_first_rc = highest_version["rc"] == 1
+        # Get info on DDNPM
+        windows_ddnpm_driver, windows_ddnpm_version, windows_ddnpm_shasum = _get_windows_ddnpm_release_json_info(
+            release_json, highest_major, version_re, is_first_rc
+        )
+
+    print("windows ddnpm version is {}".format(windows_ddnpm_version))
+
     _save_release_json(
         release_json,
         list_major_versions,
@@ -833,4 +911,66 @@ def create_rc(
         jmxfetch_version,
         security_agent_policies_version,
         macos_build_version,
+        windows_ddnpm_driver,
+        windows_ddnpm_version,
+        windows_ddnpm_shasum,
     )
+
+    # Update internal module dependencies
+    update_modules(ctx, _stringify_version(highest_version))
+
+
+def check_version(agent_version):
+    """Check Agent version to see if it is valid."""
+    version_re = re.compile(r'7[.](\d+)[.](\d+)(-rc\.(\d+))?')
+    if not version_re.match(agent_version):
+        raise Exit(message="Version should be of the form 7.Y.Z or 7.Y.Z-rc.t")
+
+
+@task
+def update_modules(ctx, agent_version, verify=True):
+    """
+    Update internal dependencies between the different Agent modules.
+    * --verify checks for correctness on the Agent Version (on by default).
+
+    Examples:
+    inv -e release.update-modules 7.27.0
+    """
+    if verify:
+        check_version(agent_version)
+
+    for module in DEFAULT_MODULES.values():
+        for dependency in module.dependencies:
+            dependency_mod = DEFAULT_MODULES[dependency]
+            ctx.run(
+                "go mod edit -require={dependency_path} {go_mod_path}".format(
+                    dependency_path=dependency_mod.dependency_path(agent_version), go_mod_path=module.go_mod_path()
+                )
+            )
+
+
+@task
+def tag_version(ctx, agent_version, commit="HEAD", verify=True, push=True):
+    """
+    Create tags for a given Datadog Agent version.
+    The version should be given as an Agent 7 version.
+
+    * --commit COMMIT will tag COMMIT with the tags (default HEAD)
+    * --verify checks for correctness on the Agent version (on by default).
+    * --push will push the tags to the origin remote (on by default).
+
+    Examples:
+    inv -e release.tag-version 7.27.0                 # Create tags and push them to origin
+    inv -e release.tag-version 7.27.0-rc.3 --no-push  # Create tags locally; don't push them
+    """
+    if verify:
+        check_version(agent_version)
+
+    for module in DEFAULT_MODULES.values():
+        if module.should_tag:
+            for tag in module.tag(agent_version):
+                ctx.run("git tag -m {tag} {tag} {commit}".format(tag=tag, commit=commit))
+                if push:
+                    ctx.run("git push origin {}".format(tag))
+
+    print("Created all tags for version {}".format(agent_version))

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build kubeapiserver
 
@@ -10,6 +10,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"expvar"
+	"fmt"
 
 	"k8s.io/client-go/kubernetes"
 
@@ -42,23 +43,20 @@ func GetStatus(apiCl kubernetes.Interface) map[string]interface{} {
 	} else {
 		status["ClusterID"] = clusterID
 	}
-	// get cluster name
-	hostname, err := util.GetHostname()
-	if err != nil {
-		status["ClusterNameError"] = err.Error()
-	} else {
-		status["ClusterName"] = clustername.GetClusterName(hostname)
-	}
+
+	setClusterName(status)
+	setCollectionIsWorking(status)
 
 	// get orchestrator endpoints
-	endpoints := map[string]string{}
+	endpoints := map[string][]string{}
 	orchestratorCfg := orchcfg.NewDefaultOrchestratorConfig()
-	err = orchestratorCfg.LoadYamlConfig(config.Datadog.ConfigFileUsed())
+	err = orchestratorCfg.Load()
 	if err == nil {
 		// obfuscate the api keys
 		for _, endpoint := range orchestratorCfg.OrchestratorEndpoints {
+			endpointStr := endpoint.Endpoint.String()
 			if len(endpoint.APIKey) > 5 {
-				endpoints[endpoint.Endpoint.String()] = endpoint.APIKey[len(endpoint.APIKey)-5:]
+				endpoints[endpointStr] = append(endpoints[endpointStr], endpoint.APIKey[len(endpoint.APIKey)-5:])
 			}
 		}
 	}
@@ -81,7 +79,7 @@ func GetStatus(apiCl kubernetes.Interface) map[string]interface{} {
 
 	// get cache efficiency
 	for _, node := range orchestrator.NodeTypes() {
-		if value, found := orchestrator.KubernetesResourceCache.Get(BuildStatsKey(node)); found {
+		if value, found := orchestrator.KubernetesResourceCache.Get(orchestrator.BuildStatsKey(node)); found {
 			status[node.String()+"sStats"] = value
 		}
 	}
@@ -101,4 +99,29 @@ func GetStatus(apiCl kubernetes.Interface) map[string]interface{} {
 	}
 
 	return status
+}
+
+func setClusterName(status map[string]interface{}) {
+	errorMsg := "No cluster name was detected. This means resource collection will not work."
+
+	hostname, err := util.GetHostname()
+	if err != nil {
+		status["ClusterNameError"] = fmt.Sprintf("Error detecting cluster name: %s.\n%s", err.Error(), errorMsg)
+	} else {
+		if cName := clustername.GetClusterName(hostname); cName != "" {
+			status["ClusterName"] = cName
+		} else {
+			status["ClusterName"] = errorMsg
+		}
+	}
+}
+
+// setCollectionIsWorking checks whether collection is running by checking telemetry/cache data
+func setCollectionIsWorking(status map[string]interface{}) {
+	c := orchestrator.KubernetesResourceCache.ItemCount()
+	if c > 0 {
+		status["CollectionWorking"] = "The collection is at least partially running since the cache has been populated."
+	} else {
+		status["CollectionWorking"] = "The collection has not run successfully yet since the cache is empty."
+	}
 }

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 // +build clusterchecks
 // +build kubeapiserver
@@ -18,7 +18,7 @@ import (
 	listersv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/DataDog/datadog-agent/pkg/autodiscovery/common"
+	"github.com/DataDog/datadog-agent/pkg/autodiscovery/common/utils"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/providers/names"
 	"github.com/DataDog/datadog-agent/pkg/config"
@@ -56,6 +56,7 @@ type configInfo struct {
 // NewKubeEndpointsConfigProvider returns a new ConfigProvider connected to apiserver.
 // Connectivity is not checked at this stage to allow for retries, Collect will do it.
 func NewKubeEndpointsConfigProvider(config config.ConfigurationProviders) (ConfigProvider, error) {
+	// Using GetAPIClient (no wait) as Client should already be initialized by Cluster Agent main entrypoint before
 	ac, err := apiserver.GetAPIClient()
 	if err != nil {
 		return nil, fmt.Errorf("cannot connect to apiserver: %s", err)
@@ -257,7 +258,7 @@ func generateConfigs(tpl integration.Config, resolveMode endpointResolveMode, ke
 	case "":
 		fallthrough
 	case kubeEndpointResolveAuto:
-		resolveFunc = common.ResolveEndpointConfigAuto
+		resolveFunc = utils.ResolveEndpointConfigAuto
 	}
 
 	for i := range kep.Subsets {
@@ -290,4 +291,9 @@ func generateConfigs(tpl integration.Config, resolveMode endpointResolveMode, ke
 
 func init() {
 	RegisterProvider(KubeEndpointsProviderName, NewKubeEndpointsConfigProvider)
+}
+
+// GetConfigErrors is not implemented for the kubeEndpointsConfigProvider
+func (k *kubeEndpointsConfigProvider) GetConfigErrors() map[string]ErrorMsgSet {
+	return make(map[string]ErrorMsgSet)
 }

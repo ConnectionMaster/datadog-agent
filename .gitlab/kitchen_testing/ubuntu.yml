@@ -5,22 +5,16 @@
 # include:
 #   - /.gitlab/kitchen_common/testing.yml
 
-.if_deploy_6: &if_deploy_6
-  if: $DEPLOY_AGENT == "true" && $RELEASE_VERSION_6 != ""
-
-.if_deploy_7: &if_deploy_7
-  if: $DEPLOY_AGENT == "true" && $RELEASE_VERSION_7 != ""
-
 # Kitchen: OSes
 # -------------
 
 .kitchen_os_ubuntu:
+  variables:
+    KITCHEN_PLATFORM: "ubuntu"
+    KITCHEN_OSVERS: "ubuntu-14-04,ubuntu-16-04,ubuntu-18-04,ubuntu-20-04"
+    DEFAULT_KITCHEN_OSVERS: "ubuntu-20-04"
   before_script:
     - rsync -azr --delete ./ $SRC_PATH
-    - export TEST_PLATFORMS="ubuntu-14-04,urn,Canonical:UbuntuServer:14.04.5-LTS:14.04.201905140"
-    - export TEST_PLATFORMS="$TEST_PLATFORMS|ubuntu-16-04,urn,Canonical:UbuntuServer:16.04.0-LTS:16.04.201906170"
-    - export TEST_PLATFORMS="$TEST_PLATFORMS|ubuntu-18-04,urn,Canonical:UbuntuServer:18.04-LTS:18.04.201906040"
-    - export TEST_PLATFORMS="$TEST_PLATFORMS|ubuntu-20-04,urn,Canonical:0001-com-ubuntu-server-focal:20_04-lts:20.04.202004230"
     - cd $DD_AGENT_TESTING_DIR
     - bash -l tasks/kitchen_setup.sh
 
@@ -29,14 +23,14 @@
 
 .kitchen_scenario_ubuntu_a6:
   extends:
-    - .kitchen_os_ubuntu
     - .kitchen_agent_a6
+    - .kitchen_os_ubuntu
   needs: ["deploy_deb_testing-a6"]
 
 .kitchen_scenario_ubuntu_a7:
   extends:
-    - .kitchen_os_ubuntu
     - .kitchen_agent_a7
+    - .kitchen_os_ubuntu
   needs: ["deploy_deb_testing-a7"]
 
 # Kitchen: final test matrix (tests * scenarios)
@@ -48,6 +42,9 @@ kitchen_ubuntu_install_script_agent-a6:
     - .kitchen_test_install_script_agent
 
 kitchen_ubuntu_install_script_agent-a7:
+  # Run install script test on branches, on a reduced number of platforms
+  rules:
+    !reference [.on_default_kitchen_tests_a7]
   extends:
     - .kitchen_scenario_ubuntu_a7
     - .kitchen_test_install_script_agent
@@ -70,14 +67,14 @@ kitchen_ubuntu_step_by_step_agent-a6:
     - .kitchen_scenario_ubuntu_a6
     - .kitchen_test_step_by_step_agent
   rules:
-    - <<: *if_deploy_6
+    !reference [.on_deploy_a6]
 
 kitchen_ubuntu_step_by_step_agent-a7:
   extends:
     - .kitchen_scenario_ubuntu_a7
     - .kitchen_test_step_by_step_agent
   rules:
-    - <<: *if_deploy_7
+    !reference [.on_deploy_a7]
 
 kitchen_ubuntu_upgrade5_agent-a6:
   extends:

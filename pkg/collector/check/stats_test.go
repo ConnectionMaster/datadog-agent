@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package check
 
@@ -102,4 +102,39 @@ func TestNewStatsStateTelemetryInitializedWhenGloballyEnabled(t *testing.T) {
 		tlmData,
 		"checks__runs{check_name=\"checkString\",state=\"ok\"} 0",
 	)
+}
+
+func TestTranslateEventPlatformEventTypes(t *testing.T) {
+	original := map[string]interface{}{
+		"EventPlatformEvents": map[string]interface{}{
+			"dbm-samples":  12,
+			"unknown-type": 34,
+		},
+		"EventPlatformEventsErrors": map[string]interface{}{
+			"dbm-samples":  12,
+			"unknown-type": 34,
+		},
+		"SomeOtherKey": map[string]interface{}{
+			"dbm-samples":  12,
+			"unknown-type": 34,
+		},
+	}
+	expected := map[string]interface{}{
+		"EventPlatformEvents": map[string]interface{}{
+			"Database Monitoring Query Samples": 12,
+			"unknown-type":                      34,
+		},
+		"EventPlatformEventsErrors": map[string]interface{}{
+			"Database Monitoring Query Samples": 12,
+			"unknown-type":                      34,
+		},
+		"SomeOtherKey": map[string]interface{}{
+			"dbm-samples":  12,
+			"unknown-type": 34,
+		},
+	}
+	result, err := TranslateEventPlatformEventTypes(original)
+	assert.NoError(t, err)
+	assert.True(t, assert.ObjectsAreEqual(expected, result))
+	assert.EqualValues(t, expected, result)
 }

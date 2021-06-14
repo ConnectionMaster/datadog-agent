@@ -2,7 +2,7 @@
 # Cookbook Name:: dd-security-agent-check
 # Recipe:: default
 #
-# Copyright (C) 2020 Datadog
+# Copyright (C) 2020-present Datadog
 #
 
 if node['platform_family'] != 'windows'
@@ -56,9 +56,10 @@ if node['platform_family'] != 'windows'
       tag '7'
       cap_add ['SYS_ADMIN', 'SYS_RESOURCE', 'SYS_PTRACE', 'NET_ADMIN', 'IPC_LOCK', 'ALL']
       command "sleep 3600"
-      volumes ['/tmp/security-agent:/tmp/security-agent', '/proc:/host/proc']
-      env ['HOST_PROC=/host/proc']
+      volumes ['/tmp/security-agent:/tmp/security-agent', '/proc:/host/proc', '/etc/os-release:/host/etc/os-release']
+      env ['HOST_PROC=/host/proc', 'DOCKER_DD_AGENT=yes']
       privileged true
+      pid_mode 'host'
     end
 
     docker_exec 'debug_fs' do
@@ -79,7 +80,7 @@ if node['platform_family'] != 'windows'
     end
   end
 
-  if not platform_family?('suse')
+  if not platform_family?('suse', 'rhel')
     package 'Install i386 libc' do
       case node[:platform]
       when 'redhat', 'centos', 'fedora'

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2017-2020 Datadog, Inc.
+// Copyright 2017-present Datadog, Inc.
 
 package listeners
 
@@ -49,12 +49,13 @@ func (l *EnvironmentListener) Stop() {
 
 func (l *EnvironmentListener) createServices() {
 	features := map[string]config.Feature{
-		"docker":      config.Docker,
-		"kubelet":     config.Kubernetes,
-		"ecs_fargate": config.ECSFargate,
-		"eks_fargate": config.EKSFargate,
-		"cri":         config.Cri,
-		"containerd":  config.Containerd,
+		"docker":            config.Docker,
+		"kubelet":           config.Kubernetes,
+		"ecs_fargate":       config.ECSFargate,
+		"eks_fargate":       config.EKSFargate,
+		"cri":               config.Cri,
+		"containerd":        config.Containerd,
+		"kube_orchestrator": config.KubeOrchestratorExplorer,
 	}
 
 	for name, feature := range features {

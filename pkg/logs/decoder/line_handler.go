@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2020 Datadog, Inc.
+// Copyright 2016-present Datadog, Inc.
 
 package decoder
 
@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"regexp"
 	"time"
+
+	"github.com/DataDog/datadog-agent/pkg/logs/config"
 )
 
 // truncatedFlag is the flag that is added at the beginning
@@ -98,10 +100,6 @@ func (h *SingleLineHandler) process(message *Message) {
 	}
 }
 
-// defaultFlushTimeout represents the time after which a multiline
-// will be be considered as complete.
-const defaultFlushTimeout = 1000 * time.Millisecond
-
 // MultiLineHandler makes sure that multiple lines from a same content
 // are properly put together.
 type MultiLineHandler struct {
@@ -115,6 +113,7 @@ type MultiLineHandler struct {
 	linesLen       int
 	status         string
 	timestamp      string
+	countInfo      *config.CountInfo
 }
 
 // NewMultiLineHandler returns a new MultiLineHandler.
@@ -126,6 +125,7 @@ func NewMultiLineHandler(outputChan chan *Message, newContentRe *regexp.Regexp, 
 		buffer:       bytes.NewBuffer(nil),
 		flushTimeout: flushTimeout,
 		lineLimit:    lineLimit,
+		countInfo:    config.NewCountInfo("MultiLine matches"),
 	}
 }
 
@@ -190,6 +190,7 @@ func (h *MultiLineHandler) run() {
 func (h *MultiLineHandler) process(message *Message) {
 
 	if h.newContentRe.Match(message.Content) {
+		h.countInfo.Add(1)
 		// the current line is part of a new message,
 		// send the buffer
 		h.sendBuffer()
